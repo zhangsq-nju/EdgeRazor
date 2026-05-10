@@ -140,6 +140,8 @@ python app.py
   - 自适应的特征蒸馏 (Adaptive Feature Distillation, AFD)
   - 熵感知的 KL 散度 (Entropy-Aware KL Divergence, EAKLD)
 
+![EdgeRazor Framework Overview](https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/EdgeRazor-Framework.png)
+
 ## 实际应用
 
 - 轻量化 ViT-S/16，[点击这里查看]((./example/vit/README.md))。
