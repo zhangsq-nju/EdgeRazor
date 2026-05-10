@@ -139,7 +139,10 @@ Quantization-Aware Distillation (QAD):
 - Configurable knowledge distillation pipelines between 16-bit and $n$-bit models
 - Knowledge distillation methods: Adaptive Feature Distillation (AFD), Entropy-Aware KL Divergence (EAKLD)
 
-![EdgeRazor Framework Overview](https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/EdgeRazor-Framework.png)
+<p align="center">
+  <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/EdgeRazor-Framework.png" alt="EdgeRazor Framework Overview" width="75%">
+  <br> Figure: Workflow of the EdgeRazor framework.
+</p>
 
 ## Applications
 
