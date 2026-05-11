@@ -14,6 +14,8 @@ equipped with nn.Linear layers for projections, so no need to replace those Atte
 If weight, activation, and KV cache quantization are needed, we can apply quantized these blocks
 with quantized nn.Linear layers as well.
 """
+# ruff: noqa N812
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

@@ -9,7 +9,7 @@ configurations from a single file or separate sources.
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Union
+from typing import Any
 
 import yaml
 
@@ -210,7 +210,7 @@ class EdgeRazorConfig:
         raise ValueError("No configuration provided")
     
     @classmethod
-    def from_dict(cls, config_dict: Dict[str, Any]) -> "EdgeRazorConfig":
+    def from_dict(cls, config_dict: dict[str, Any]) -> "EdgeRazorConfig":
         """
         Create EdgeRazorConfig from a dictionary.
         
@@ -287,9 +287,9 @@ class EdgeRazorConfig:
     @classmethod
     def _from_file(
         cls,
-        file_path: Union[str, Path] | None,
-        sub_qat_path: Union[str, Path] | None,
-        sub_kd_path: Union[str, Path] | None,
+        file_path: str | Path | None,
+        sub_qat_path: str | Path | None,
+        sub_kd_path: str | Path | None,
         reader_fn,
         config_loader_name: str,
         file_type: str,
@@ -299,7 +299,7 @@ class EdgeRazorConfig:
             file_path = Path(file_path)
             if not file_path.exists():
                 raise FileNotFoundError(f"Config file not found: {file_path}")
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 config_dict = reader_fn(f)
             return cls.from_dict(config_dict)
 
@@ -332,9 +332,9 @@ class EdgeRazorConfig:
     @classmethod
     def from_yaml(
         cls,
-        yaml_path: Union[str, Path] | None = None,
-        qat_yaml: Union[str, Path] | None = None,
-        kd_yaml: Union[str, Path] | None = None,
+        yaml_path: str | Path | None = None,
+        qat_yaml: str | Path | None = None,
+        kd_yaml: str | Path | None = None,
     ) -> "EdgeRazorConfig":
         """Load EdgeRazorConfig from YAML file(s)."""
         return cls._from_file(yaml_path, qat_yaml, kd_yaml, yaml.safe_load, 'from_yaml', 'yaml')
@@ -342,14 +342,14 @@ class EdgeRazorConfig:
     @classmethod
     def from_json(
         cls,
-        json_path: Union[str, Path] | None = None,
-        qat_json: Union[str, Path] | None = None,
-        kd_json: Union[str, Path] | None = None,
+        json_path: str | Path | None = None,
+        qat_json: str | Path | None = None,
+        kd_json: str | Path | None = None,
     ) -> "EdgeRazorConfig":
         """Load EdgeRazorConfig from JSON file(s)."""
         return cls._from_file(json_path, qat_json, kd_json, json.load, 'from_json', 'json')
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Convert EdgeRazorConfig to dictionary.
         
@@ -366,7 +366,7 @@ class EdgeRazorConfig:
         
         return result
     
-    def to_yaml(self, yaml_path: Union[str, Path]):
+    def to_yaml(self, yaml_path: str | Path):
         """
         Save EdgeRazorConfig to a unified YAML file.
         
@@ -385,7 +385,7 @@ class EdgeRazorConfig:
                 allow_unicode=True
             )
     
-    def to_json(self, json_path: Union[str, Path]):
+    def to_json(self, json_path: str | Path):
         """
         Save EdgeRazorConfig to a unified JSON file.
         
