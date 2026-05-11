@@ -1,0 +1,20 @@
+# ============================================================================
+# Training and Evaluation
+timm==1.0.25
+medmnist==3.0.2
+# ============================================================================
+# Metrics and evaluation
+scikit-learn>=1.6.1
+
+# Progress bars
+tqdm>=4.67.0
+
+# TensorBoard for visualization
+tensorboard>=2.18.0
+
+# ============================================================================
+# EdgeRazor Framework (Local Package)
+# ============================================================================
+# Install EdgeRazor from the parent directory
+# Run: pip install -e ../../
+# This will install the edgerazor package with its dependencies

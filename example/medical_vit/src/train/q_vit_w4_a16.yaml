@@ -1,0 +1,22 @@
+# Quantization Configuration for ViT: W4-A16
+# Weight: 4-bit (INT4)
+# Activation: 16-bit (No quantization)
+
+qat_configuration:
+  method: QAT
+  select:
+    target_types:
+    - linear
+    target_names: []
+    exclude_types: []
+    exclude_names: []
+  function:
+    epsilon: 1.0e-06
+    weight_function: weight_quant_uniform_symmetric_absmax_per_block_int4  # Weight quantization function
+    w_block_size: 128  # Weight quantization configuration
+    is_w_quantized: false
+    activation_function: ''  # Activation quantization function
+    a_block_size: -1  # Activation quantization configuration
+    kv_cache_function: ''
+    kv_block_size: -1
+  training: all
