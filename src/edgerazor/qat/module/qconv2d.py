@@ -9,7 +9,6 @@ Compatible with quantization functions (per-tensor, per-channel, per-block):
 1. reshape to [out_channels, in_channels * kernel_height * kernel_width]
 2. quantize, then reshape back
 """
-from typing import Union
 
 import torch.nn as nn
 from torch import Tensor
@@ -26,7 +25,7 @@ class QConv2d(nn.Conv2d):
         out_channels: int,
         kernel_size: _size_2_t,
         stride: _size_2_t = 1,
-        padding: Union[str, _size_2_t] = 0,
+        padding: str | _size_2_t = 0,
         dilation: _size_2_t = 1,
         groups: int = 1,
         bias: bool = True,

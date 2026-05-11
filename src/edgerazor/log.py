@@ -14,7 +14,8 @@ from pathlib import Path
 
 try:
     import pyfiglet
-    from colorama import Fore, Style, init as colorama_init
+    from colorama import Fore, Style
+    from colorama import init as colorama_init
     colorama_init()
     _HAS_ASCII_ART = True
 except ImportError:

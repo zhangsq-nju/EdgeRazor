@@ -705,7 +705,7 @@ class QuantConfig:
                         overrides_str += f"name='{override.module_name}'"
                 if override.overrides:
                     overrides_str += f", overrides={override.overrides}"
-                overrides_str += f"}}"
+                overrides_str += "}"
                 if idx < len(self.overrides) - 1:
                     overrides_str += ",\n"
                 else:
