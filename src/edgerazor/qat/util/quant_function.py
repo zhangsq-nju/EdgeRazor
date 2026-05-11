@@ -32,7 +32,7 @@ from .quant_function_config import (
     w5a8_block_size,
     w8a8_block_size,
 )
-from .quant_function_decorator import per_block_reshape
+from .quant_function_decorator import mixed_precision_quantize, per_block_reshape
 
 # =============================================================
 # INT1_58 (Ternary) Weight Quantization - Clip Method
@@ -133,7 +133,7 @@ def weight_quant_uniform_symmetric_clip_per_block_int1_58(
     return w_quant
 
 
-@per_block_reshape
+@mixed_precision_quantize
 def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_dynamic(
     w: Tensor,
     epsilon: float = 1e-5,
@@ -165,53 +165,27 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_dynamic(
         mixed_precision_prop: Proportion of blocks to quantize to higher precision (INT4)
 
     Returns:
-        Quantized weight tensor with dynamic mixed precision quantization
+        1D boolean mask (num_blocks,) — True for INT4 blocks, False for INT1_58
     """
-    bits_int4 = 4
-    max_val_int4 = 2**(bits_int4 - 1) - 1  # 7 for INT4
-
     with torch.no_grad():
-        # Flatten pre-shaped tensor to (num_blocks, block_size)
+        # w is pre-reshaped by decorator to [..., -1, block_size]; flatten to 2D
         num_blocks = w.numel() // block_size
         w_flat = w.view(num_blocks, block_size)
 
         # Calculate importance score for each block (using variance as metric)
-        # Shape: (num_blocks,)
         block_variance = w_flat.var(dim=-1)
 
         # Determine how many blocks should use INT4 (higher precision)
         num_int4_blocks = min(max(1, int(num_blocks * mixed_precision_prop)), num_blocks)
 
         # Select top-k blocks with highest variance for INT4 quantization
-        # Shape: (num_int4_blocks,)
         _, top_indices = torch.topk(block_variance, k=num_int4_blocks, dim=-1)
 
         # Create mask for INT4 blocks
-        # Shape: (num_blocks,)
         int4_mask = torch.zeros_like(block_variance, dtype=torch.bool)
         int4_mask.scatter_(dim=-1, index=top_indices, value=True)
 
-        # Expand mask to match block dimension
-        # Shape: (num_blocks, 1)
-        int4_mask_expanded = int4_mask.unsqueeze(-1)
-
-        # ===== INT4 Quantization (absmax method) for selected blocks =====
-        # Compute scale factor for INT4 blocks using maximum absolute value
-        w_scale_int4 = w_flat.abs().max(dim=-1, keepdim=True).values.clamp_(min=epsilon) / max_val_int4
-        # Quantize to INT4: [-7, 7]
-        w_quant_int4 = (w_flat / w_scale_int4).round().clamp(-max_val_int4, max_val_int4) * w_scale_int4
-
-        # ===== INT1_58 Quantization (clip method) for remaining blocks =====
-        # Compute scale factor for INT1_58 blocks using mean absolute value
-        w_scale_int1_58 = w_flat.abs().mean(dim=-1, keepdim=True).mul(w_scale_factor).clamp_(min=epsilon)
-        # Quantize to INT1_58: {-1, 0, 1}
-        w_quant_int1_58 = (w_flat / w_scale_int1_58).round().clamp(-1, 1) * w_scale_int1_58
-
-        # ===== Combine INT4 and INT1_58 blocks =====
-        # Use INT4 for high-variance blocks, INT1_58 for others
-        w_quant_flat = torch.where(int4_mask_expanded, w_quant_int4, w_quant_int1_58)
-
-    return w_quant_flat
+    return int4_mask
 
 
 @per_block_reshape
@@ -276,6 +250,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static(
     return w_quant_flat
 
 
+@mixed_precision_quantize
 def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_column_wise(
     w: Tensor,
     epsilon: float = 1e-5,
@@ -285,7 +260,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_column_
 ) -> Tensor:
     """
     Quantize weight to INT1_58 and INT4 per-block using static column-wise mixed precision.
-    
+
     Column-wise Static Strategy:
     - Reshapes weight (out_dim, in_dim) to (out_dim, blocks_per_channel, block_size)
     - For a weight of shape (1024, 1024) with block_size=128:
@@ -294,76 +269,47 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_column_
     - Column-wise means quantizing along the column dimension (blocks_per_channel axis)
     - Each column (all 1024 rows at the same block position) shares the same precision
     - The first few columns (block positions) use INT4, remaining columns use INT1.58
-    
+
     Difference from `_static` version:
     - `_static`: Assigns first N blocks globally in row-major order
     - `_static_column_wise`: First N columns (block positions) across ALL rows use INT4
-    
+
     Example (out_dim=1024, in_dim=1024, block_size=128, mixed_precision_prop=0.125):
     - blocks_per_channel = 8, num_int4_blocks = floor(8 * 0.125) = 1
     - Column 0 (blocks at position 0 for all 1024 rows) uses INT4
     - Columns 1-7 use INT1.58
     - Total INT4 blocks: 1024 × 1 = 1024, INT1.58 blocks: 1024 × 7 = 7168
-    
+
     Args:
         w: Weight tensor to quantize, shape (out_dim, in_dim)
         epsilon: Small value to prevent division by zero
         w_scale_factor: Multiplier for the mean absolute value (default: 2.0)
         block_size: Size of each quantization block
         mixed_precision_prop: Proportion of columns (block positions) to quantize to INT4
-    
+
     Returns:
-        Quantized weight tensor with column-wise static mixed precision quantization
+        1D boolean mask (out_dim * blocks_per_channel,) — True for INT4, False for INT1_58
     """
-    bits_int4 = 4
-    max_val_int4 = 2**(bits_int4 - 1) - 1  # 7 for INT4
-    
     with torch.no_grad():
-        # Reshape to [out_dim, num_blocks_per_channel, block_size]
-        original_shape = w.shape
-        out_dim = original_shape[0]
-        in_dim = original_shape[-1]
-        blocks_per_channel = in_dim // block_size
-        
-        # Shape: (out_dim, blocks_per_channel, block_size)
-        w_blocked = w.view(out_dim, blocks_per_channel, block_size)
-        
+        # w is pre-reshaped by decorator to (out_dim, blocks_per_channel, block_size)
+        out_dim = w.shape[0]
+        blocks_per_channel = w.shape[1]
+
         # Determine how many blocks per channel should use INT4
-        # At least 1 block if prop > 0, at most all blocks
         num_int4_blocks_per_channel = min(
             max(1, int(blocks_per_channel * mixed_precision_prop)),
             blocks_per_channel
         )
-        
-        # Create mask for INT4 blocks: first num_int4_blocks_per_channel blocks per channel
-        # Shape: (1, blocks_per_channel, 1) - broadcasts across out_dim and block_size
+
+        # Create per-column mask, then broadcast to all rows
         block_indices = torch.arange(blocks_per_channel, device=w.device)
-        int4_mask = (block_indices < num_int4_blocks_per_channel).view(1, blocks_per_channel, 1)
-        
-        # ===== INT4 Quantization (absmax method) =====
-        # Compute scale factor for each block using maximum absolute value
-        # Shape: (out_dim, blocks_per_channel, 1)
-        w_scale_int4 = w_blocked.abs().max(dim=-1, keepdim=True).values.clamp_(min=epsilon) / max_val_int4
-        # Quantize to INT4: [-7, 7]
-        w_quant_int4 = (w_blocked / w_scale_int4).round().clamp(-max_val_int4, max_val_int4) * w_scale_int4
-        
-        # ===== INT1_58 Quantization (clip method) =====
-        # Compute scale factor for each block using mean absolute value
-        # Shape: (out_dim, blocks_per_channel, 1)
-        w_scale_int1_58 = w_blocked.abs().mean(dim=-1, keepdim=True).mul(w_scale_factor).clamp_(min=epsilon)
-        # Quantize to INT1_58: {-1, 0, 1}
-        w_quant_int1_58 = (w_blocked / w_scale_int1_58).round().clamp(-1, 1) * w_scale_int1_58
-        
-        # ===== Combine using the channel-wise mask =====
-        # Use INT4 for first blocks of each channel, INT1_58 for remaining
-        w_quant = torch.where(int4_mask, w_quant_int4, w_quant_int1_58)
-        
-        # Reshape back to original shape
-        w_quant = w_quant.view(original_shape)
-    
-    return w_quant
+        col_mask = block_indices < num_int4_blocks_per_channel  # (blocks_per_channel,)
+        int4_mask = col_mask.unsqueeze(0).expand(out_dim, -1).reshape(-1)
+
+    return int4_mask
 
 
+@mixed_precision_quantize
 def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_row_wise_sparse(
     w: Tensor,
     epsilon: float = 1e-5,
@@ -373,7 +319,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_row_wis
 ) -> Tensor:
     """
     Quantize weight to INT1_58 and INT4 per-block using static row-wise sparse mixed precision.
-    
+
     Row-wise Sparse Static Strategy:
     - Reshapes weight (out_dim, in_dim) to (out_dim, blocks_per_channel, block_size)
     - For a weight of shape (1024, 1024) with block_size=128:
@@ -382,75 +328,45 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_row_wis
     - Row-wise means quantizing along the row dimension (out_dim axis)
     - Every n-th row uses INT4 for ALL its blocks (entire row), where n = 1/prop
     - Remaining rows use INT1.58 for ALL their blocks
-    
+
     Difference from `_static_column_wise`:
     - `_static_column_wise`: First N columns use INT4 (vertical allocation)
     - `_static_row_wise_sparse`: Every n-th row uses INT4 (horizontal sparse allocation)
-    
+
     Example (out_dim=1024, in_dim=1024, block_size=128, mixed_precision_prop=0.01):
     - blocks_per_channel = 8, n = 1/0.01 = 100
     - Rows 0, 100, 200, ..., 900 use INT4 for all 8 blocks (10 rows total)
     - Other rows use INT1.58 for all 8 blocks (1014 rows)
     - Total INT4 blocks: 10 × 8 = 80, INT1.58 blocks: 1014 × 8 = 8112
     - Actual INT4 proportion: 80 / 8192 ≈ 0.98%
-    
+
     Args:
         w: Weight tensor to quantize, shape (out_dim, in_dim)
         epsilon: Small value to prevent division by zero
         w_scale_factor: Multiplier for the mean absolute value (default: 2.0)
         block_size: Size of each quantization block
         mixed_precision_prop: Proportion determines row spacing (n = 1/prop)
-    
+
     Returns:
-        Quantized weight tensor with row-wise sparse static mixed precision quantization
+        1D boolean mask (out_dim * blocks_per_channel,) — True for INT4, False for INT1_58
     """
-    bits_int4 = 4
-    max_val_int4 = 2**(bits_int4 - 1) - 1  # 7 for INT4
-    
     with torch.no_grad():
-        # Reshape to [out_dim, num_blocks_per_channel, block_size]
-        original_shape = w.shape
-        out_dim = original_shape[0]
-        in_dim = original_shape[-1]
-        blocks_per_channel = in_dim // block_size
-        
-        # Shape: (out_dim, blocks_per_channel, block_size)
-        w_blocked = w.view(out_dim, blocks_per_channel, block_size)
-        
+        # w is pre-reshaped by decorator to (out_dim, blocks_per_channel, block_size)
+        out_dim = w.shape[0]
+        blocks_per_channel = w.shape[1]
+
         # Calculate row spacing: every n-th row gets INT4
-        # n = 1 / mixed_precision_prop, ensuring at least 1
         row_spacing = max(1, int(1.0 / mixed_precision_prop)) if mixed_precision_prop > 0 else out_dim + 1
-        
-        # Create mask for INT4 rows: rows at indices 0, n, 2n, 3n, ... use INT4
-        # Shape: (out_dim, 1, 1) - broadcasts across blocks_per_channel and block_size
+
+        # Create per-row mask, then broadcast to all blocks in each row
         row_indices = torch.arange(out_dim, device=w.device)
-        int4_mask = (row_indices % row_spacing == 0).view(out_dim, 1, 1)
-        
-        # ===== INT4 Quantization (absmax method) =====
-        # Compute scale factor for each block using maximum absolute value
-        # Shape: (out_dim, blocks_per_channel, 1)
-        w_scale_int4 = w_blocked.abs().max(dim=-1, keepdim=True).values.clamp_(min=epsilon) / max_val_int4
-        # Quantize to INT4: [-7, 7]
-        w_quant_int4 = (w_blocked / w_scale_int4).round().clamp(-max_val_int4, max_val_int4) * w_scale_int4
-        
-        # ===== INT1_58 Quantization (clip method) =====
-        # Compute scale factor for each block using mean absolute value
-        # Shape: (out_dim, blocks_per_channel, 1)
-        w_scale_int1_58 = w_blocked.abs().mean(dim=-1, keepdim=True).mul(w_scale_factor).clamp_(min=epsilon)
-        # Quantize to INT1_58: {-1, 0, 1}
-        w_quant_int1_58 = (w_blocked / w_scale_int1_58).round().clamp(-1, 1) * w_scale_int1_58
-        
-        # ===== Combine using the row-wise sparse mask =====
-        # Use INT4 for every n-th row (all blocks), INT1_58 for remaining rows
-        w_quant = torch.where(int4_mask, w_quant_int4, w_quant_int1_58)
-        
-        # Reshape back to original shape
-        w_quant = w_quant.view(original_shape)
-    
-    return w_quant
+        row_mask = row_indices % row_spacing == 0  # (out_dim,)
+        int4_mask = row_mask.unsqueeze(1).expand(out_dim, blocks_per_channel).reshape(-1)
+
+    return int4_mask
 
 
-@per_block_reshape
+@mixed_precision_quantize
 def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_sparse(
     w: Tensor,
     epsilon: float = 1e-5,
@@ -484,14 +400,10 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_sparse(
         mixed_precision_prop: Proportion of blocks to quantize to higher precision (INT4)
 
     Returns:
-        Quantized weight tensor with sparse static mixed precision quantization.
+        1D boolean mask (num_blocks,) — True for INT4 blocks, False for INT1_58
     """
-    bits_int4 = 4
-    max_val_int4 = 2**(bits_int4 - 1) - 1  # 7 for INT4
-
     with torch.no_grad():
         num_blocks = w.numel() // block_size
-        w_flat = w.view(num_blocks, block_size)
 
         # --- Create the sparse mask for INT4 blocks ---
         group_size = 100
@@ -503,23 +415,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_sparse(
         # Mask is True for the first `num_int4_per_group` blocks in every `group_size` chunk
         int4_mask = (indices % group_size) < num_int4_per_group
 
-        # Expand mask to match block dimension for torch.where
-        # Shape: (num_blocks, 1)
-        int4_mask_expanded = int4_mask.unsqueeze(-1)
-
-        # ===== INT4 Quantization (absmax method) for all blocks =====
-        w_scale_int4 = w_flat.abs().max(dim=-1, keepdim=True).values.clamp_(min=epsilon) / max_val_int4
-        w_quant_int4 = (w_flat / w_scale_int4).round().clamp(-max_val_int4, max_val_int4) * w_scale_int4
-
-        # ===== INT1_58 Quantization (clip method) for all blocks =====
-        w_scale_int1_58 = w_flat.abs().mean(dim=-1, keepdim=True).mul(w_scale_factor).clamp_(min=epsilon)
-        w_quant_int1_58 = (w_flat / w_scale_int1_58).round().clamp(-1, 1) * w_scale_int1_58
-
-        # ===== Combine using the sparse mask =====
-        # Use INT4 for blocks where mask is True, INT1_58 otherwise
-        w_quant_flat = torch.where(int4_mask_expanded, w_quant_int4, w_quant_int1_58)
-
-    return w_quant_flat
+    return int4_mask
 
 
 # =============================================================
@@ -1204,6 +1100,7 @@ def state_quant_uniform_symmetric_absmax_per_token_int8(
         return x_quant * x_scale
 
 
+@per_block_reshape
 def state_quant_uniform_symmetric_absmax_per_block_int8(
     x: Tensor,
     epsilon: float = 1e-5,
@@ -1211,9 +1108,9 @@ def state_quant_uniform_symmetric_absmax_per_block_int8(
 ) -> Tensor:
     """
     Quantize state (activation/kv_cache) to INT8 per-block using absmax method.
-    
+
     Applies group quantization by dividing features into blocks.
-    
+
     Args:
         x: Input tensor to quantize, shape ([batch,] seq_len, hidden_dim)
         epsilon: Small value to prevent division by zero
@@ -1225,45 +1122,12 @@ def state_quant_uniform_symmetric_absmax_per_block_int8(
     bits = 8
     max_val = 2**(bits - 1) - 1  # 127 for INT8
 
-    original_shape = x.shape
-    feature_dim = original_shape[-1]
-    original_numel = x.numel()
-    
     with torch.no_grad():
-        # Case 1: feature_dim is divisible by block_size (most common)
-        if feature_dim % block_size == 0:
-            intermediate_shape = list(original_shape[:-1]) + [-1, block_size]
-            x_blocked = x.reshape(intermediate_shape)
-            need_truncate = False
-        
-        # Case 2: total elements divisible by block_size
-        elif original_numel % block_size == 0:
-            x_blocked = x.reshape(-1, block_size)
-            need_truncate = False
-        
-        # Case 3: need to pad to make total elements divisible by block_size
-        else:
-            # Calculate how many elements to pad
-            remainder = original_numel % block_size
-            pad_elements = block_size - remainder
-            
-            # Flatten, pad, then reshape to blocks
-            x_flat = x.contiguous().view(-1)
-            x_padded = torch.nn.functional.pad(x_flat, (0, pad_elements), value=0)
-            x_blocked = x_padded.reshape(-1, block_size)
-            need_truncate = True
-
         # Compute scale factor for each block
-        x_scale = x_blocked.abs().max(dim=-1, keepdim=True).values.clamp_(min=epsilon) / max_val
-        
-        # Quantize to INT8: [-127, 127]
-        x_quant = x_blocked.div(x_scale).round().clamp_(-max_val, max_val)
-        x_quant = x_quant * x_scale
-        
-        # Restore original shape
-        if need_truncate:
-            x_quant = x_quant.view(-1)[:original_numel].view(original_shape)
-        else:
-            x_quant = x_quant.view(original_shape)
+        x_scale = x.abs().max(dim=-1, keepdim=True).values.clamp_(min=epsilon) / max_val
 
-    return x_quant
+        # Quantize to INT8: [-127, 127]
+        x_quant = x.div(x_scale).round().clamp_(-max_val, max_val)
+        x_quant = x_quant * x_scale
+
+        return x_quant
