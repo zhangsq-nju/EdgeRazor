@@ -9,7 +9,7 @@ name = "edgerazor"
 version = "1.2.8"
 description = "EdgeRazor: Lightweight framework for Edge AI."
 readme = "./asset/README_pypi.md"
-requires-python = "==3.10.20"
+requires-python = ">=3.10.20"
 license = { text = "Apache 2.0" }
 authors = [
     { name = "Shu-Hao Zhang" },
@@ -37,10 +37,10 @@ classifiers = [
 # Core dependencies
 dependencies = [
     "ruff>=0.13.1",
-    "transformers==4.57.1",
+    "transformers>=4.55.0,<=4.57.1",
     "pyyaml==6.0.3",
-    "torch==2.9.1",
-    "torchvision==0.24.1",
+    "torch<=2.9.1,>=2.8.0",
+    "torchvision>=0.20.0",
     "pyfiglet>=1.0.0",
     "colorama>=0.4.0",
 ]
@@ -89,6 +89,52 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
 
+# ============================================================================
+# Optional Development Dependencies
+# ============================================================================
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.10",
+    "nox>=2024.0",
+]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.10",
+]
+
+# ============================================================================
+# Pytest Configuration
+# ============================================================================
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+    "-v",
+    "--tb=short",
+]
+
+[tool.coverage.run]
+source = ["src/edgerazor"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+
+# ============================================================================
+# Build System
+# ============================================================================
 [build-system]
 requires = ["setuptools>=82.0.1"]
 build-backend = "setuptools.build_meta"
