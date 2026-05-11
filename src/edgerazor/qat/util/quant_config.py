@@ -11,6 +11,25 @@ import yaml
 
 from ..map import modules_map, quant_function_map
 
+# Pre-built reverse mappings for O(1) type/function → name lookup in to_dict()
+_modules_map_reverse = {v: k for k, v in modules_map.items()}
+_quant_function_map_reverse = {v: k for k, v in quant_function_map.items()}
+
+def _safe_json_default(obj):
+    """Fallback JSON serializer for objects not natively JSON-serializable.
+
+    Handles torch.Tensor (via float/list), and falls back to str/repr
+    for other non-serializable types, preventing silent TypeError at dump time.
+    """
+    try:
+        return float(obj)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return str(obj)
+    except Exception:
+        return repr(obj)
+
 
 # Custom YAML representer for OrderedDict to maintain order
 def represent_ordereddict(dumper, data):
@@ -560,49 +579,33 @@ class QuantConfig:
             Dictionary representation of the configuration with ordered fields:
             method, select, function, overrides, training
         """
-        # Convert module types back to string names for serialization
+        # Convert module types back to string names for serialization (O(1) via reverse map)
         target_types_list = []
         for module_type in self.select.target_types:
-            # Find the string key for this module type
-            for key, value in modules_map.items():
-                if value == module_type:
-                    target_types_list.append(key)
-                    break
+            name = _modules_map_reverse.get(module_type)
+            if name is not None:
+                target_types_list.append(name)
 
         exclude_types_list = []
         for module_type in self.select.exclude_types:
-            # Find the string key for this module type
-            for key, value in modules_map.items():
-                if value == module_type:
-                    exclude_types_list.append(key)
-                    break
+            name = _modules_map_reverse.get(module_type)
+            if name is not None:
+                exclude_types_list.append(name)
 
-        # Convert function objects back to string names for serialization
+        # Convert function objects back to string names for serialization (O(1) via reverse map)
         weight_func_str = self.function.weight_function
         if callable(weight_func_str):
-            # Find the string key for this function
-            for key, value in quant_function_map.items():
-                if value == weight_func_str:
-                    weight_func_str = key
-                    break
+            weight_func_str = _quant_function_map_reverse.get(weight_func_str, weight_func_str)
 
         activation_func_str = self.function.activation_function
         if callable(activation_func_str):
-            # Find the string key for this function
-            for key, value in quant_function_map.items():
-                if value == activation_func_str:
-                    activation_func_str = key
-                    break
+            activation_func_str = _quant_function_map_reverse.get(activation_func_str, activation_func_str)
         elif activation_func_str is None:
             activation_func_str = ""
 
         kv_cache_func_str = self.function.kv_cache_function
         if callable(kv_cache_func_str):
-            # Find the string key for this function
-            for key, value in quant_function_map.items():
-                if value == kv_cache_func_str:
-                    kv_cache_func_str = key
-                    break
+            kv_cache_func_str = _quant_function_map_reverse.get(kv_cache_func_str, kv_cache_func_str)
         elif kv_cache_func_str is None:
             kv_cache_func_str = ""
 
@@ -683,16 +686,16 @@ class QuantConfig:
         json_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(json_path, 'w', encoding='utf-8') as file:
-            json.dump(self.to_dict(), file, indent=2, ensure_ascii=False)
+            json.dump(self.to_dict(), file, indent=2, ensure_ascii=False, default=_safe_json_default)
 
     def __str__(self) -> str:
         """String representation of the configuration"""
         # Format overrides if present
         overrides_str = ""
         if self.overrides:
-            overrides_str = f",\n    overrides=[\n"
+            overrides_str = ",\n    overrides=[\n"
             for idx, override in enumerate(self.overrides):
-                overrides_str += f"        {{"
+                overrides_str += "        {{"
                 if override.module_type:
                     overrides_str += f"type='{override.module_type}'"
                 if override.module_name:

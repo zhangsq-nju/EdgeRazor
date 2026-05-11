@@ -59,6 +59,7 @@ Distill function format: `compute_xxx(...)`
 - kldc: Kullback-Leibler Divergence Confidence
 - fd: Feature Distillation (MSE Loss)
 """
+# ruff: noqa: N812
 
 from pathlib import Path
 
@@ -338,9 +339,9 @@ class KD:
                     kd_config_loss=loss_config
                 )
                 
-                weighted_loss = loss_config.alpha * loss_value
+                weighted_loss = loss_config.alpha * float(loss_value)
                 distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = loss_value.item()
+                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
             
             # Feature/Hidden states distillation (MSE-based)
             elif loss_config.loss_type == 'hidden_states':
@@ -417,7 +418,7 @@ class KD:
                                 kd_config_loss=loss_config
                             )
                             
-                            layer_loss += loss_value
+                            layer_loss += float(loss_value)
                             num_valid_layers += 1
                         
                         if num_valid_layers == 0:
@@ -449,9 +450,9 @@ class KD:
                         kd_config_loss=loss_config
                     )
                 
-                weighted_loss = loss_config.alpha * loss_value
+                weighted_loss = loss_config.alpha * float(loss_value)
                 distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = loss_value.item()
+                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
             
             # Attention distillation (KLD-based on attention distributions)
             elif loss_config.loss_type == 'attentions':
@@ -559,7 +560,7 @@ class KD:
                                 kd_config_loss=loss_config
                             )
                             
-                            layer_loss += loss_value
+                            layer_loss += float(loss_value)
                             num_valid_layers += 1
                         
                         if num_valid_layers == 0:
@@ -594,9 +595,9 @@ class KD:
                         kd_config_loss=loss_config
                     )
                 
-                weighted_loss = loss_config.alpha * loss_value
+                weighted_loss = loss_config.alpha * float(loss_value)
                 distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = loss_value.item()
+                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
             
             # Past key values distillation (Value-Value relation based)
             elif loss_config.loss_type == 'past_key_values':
@@ -814,7 +815,7 @@ class KD:
                                     kd_config_loss=loss_config
                                 )
                             
-                            layer_loss += loss_value
+                            layer_loss += float(loss_value)
                             num_valid_layers += 1
                         
                         if num_valid_layers == 0:
@@ -898,9 +899,9 @@ class KD:
                         )
                         continue
                 
-                weighted_loss = loss_config.alpha * loss_value
+                weighted_loss = loss_config.alpha * float(loss_value)
                 distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = loss_value.item()
+                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
             
             # Unknown loss type
             else:
@@ -909,10 +910,7 @@ class KD:
                 )
         
         # Finalize loss dictionary
-        loss_dict['distill_loss'] = (
-            distill_loss.item() if isinstance(distill_loss, torch.Tensor)
-            else distill_loss
-        )
+        loss_dict['distill_loss'] = distill_loss
         
         # Compute total loss with task_loss alpha weighting
         # total_loss = loss_task_alpha * task_loss + distill_loss

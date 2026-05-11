@@ -16,15 +16,6 @@ import yaml
 from .kd.util import DistillConfig
 from .qat.util import QuantConfig
 
-_original_encoder_default = json.JSONEncoder.default
-
-def _patched_default(self, obj):
-    if hasattr(obj, 'to_dict'):
-        return obj.to_dict()
-    return _original_encoder_default(self, obj)
-
-json.JSONEncoder.default = _patched_default
-
 
 class EdgeRazorConfig:
     """
@@ -95,6 +86,47 @@ class EdgeRazorConfig:
         self.kd_config = kd_config
         self.log_level = log_level
     
+    @staticmethod
+    def _resolve_log_level(config_dict=None, qat_config=None, kd_config=None, default=logging.ERROR):
+        """Resolve log_level with priority: EdgeRazor > QAT > KD > default."""
+        if config_dict and config_dict.get('log_level') is not None:
+            return config_dict.get('log_level')
+        if qat_config is not None and getattr(qat_config, 'log_level', None) is not None:
+            return qat_config.log_level
+        if kd_config is not None and getattr(kd_config, 'log_level', None) is not None:
+            return kd_config.log_level
+        return default
+
+    @staticmethod
+    def _load_component_config(config, method, config_constructor, wrapper_key):
+        """Load a single component config (QAT or KD) from dict or file path.
+
+        Args:
+            config: dict or file path (str/Path)
+            method: 'QAT' or 'KD'
+            config_constructor: callable(dict) -> config object
+            wrapper_key: e.g. 'qat_configuration' or 'kd_configuration'
+        """
+        if isinstance(config, dict):
+            data = config.copy()
+        elif isinstance(config, (str, Path)):
+            path = Path(config)
+            with open(path, encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            if wrapper_key in data:
+                data = data[wrapper_key]
+        else:
+            raise TypeError(f"Unsupported config type: {type(config)}")
+
+        if 'method' not in data:
+            data['method'] = method
+        elif data['method'].upper() != method:
+            raise ValueError(
+                f"Invalid method in config: '{data['method']}'. Expected '{method}'."
+            )
+
+        return config_constructor(data)
+
     @classmethod
     def load(
         cls,
@@ -159,77 +191,17 @@ class EdgeRazorConfig:
         
         # Separate configurations
         if qat_config is not None or kd_config is not None:
-            qat_cfg = None
-            kd_cfg = None
-            
-            # Load QAT config
-            if qat_config is not None:
-                if isinstance(qat_config, dict):
-                    qat_dict = qat_config.copy()
-                    if 'method' not in qat_dict:
-                        qat_dict['method'] = 'QAT'
-                    elif qat_dict['method'].upper() != 'QAT':
-                        raise ValueError(
-                            f"Invalid method in qat_config: '{qat_dict['method']}'. "
-                            f"Expected 'QAT' but got '{qat_dict['method']}'"
-                        )
-                    qat_cfg = QuantConfig(qat_dict)
-                elif isinstance(qat_config, (str, Path)):
-                    path = Path(qat_config)
-                    with open(path, encoding='utf-8') as f:
-                        qat_data = yaml.safe_load(f)
-                    # Check if it has qat_configuration wrapper
-                    if 'qat_configuration' in qat_data:
-                        qat_data = qat_data['qat_configuration']
-                    if 'method' not in qat_data:
-                        qat_data['method'] = 'QAT'
-                    elif qat_data['method'].upper() != 'QAT':
-                        raise ValueError(
-                            f"Invalid method in qat_config file '{path}': '{qat_data['method']}'. "
-                            f"Expected 'QAT' but got '{qat_data['method']}'"
-                        )
-                    qat_cfg = QuantConfig(qat_data)
-                else:
-                    raise TypeError(f"Unsupported qat_config type: {type(qat_config)}")
-            
-            # Load KD config
-            if kd_config is not None:
-                if isinstance(kd_config, dict):
-                    kd_dict = kd_config.copy()
-                    if 'method' not in kd_dict:
-                        kd_dict['method'] = 'KD'
-                    elif kd_dict['method'].upper() != 'KD':
-                        raise ValueError(
-                            f"Invalid method in kd_config: '{kd_dict['method']}'. "
-                            f"Expected 'KD' but got '{kd_dict['method']}'"
-                        )
-                    kd_cfg = DistillConfig.from_dict(kd_dict)
-                elif isinstance(kd_config, (str, Path)):
-                    path = Path(kd_config)
-                    with open(path, encoding='utf-8') as f:
-                        kd_data = yaml.safe_load(f)
-                    # Check if it has kd_configuration wrapper
-                    if 'kd_configuration' in kd_data:
-                        kd_data = kd_data['kd_configuration']
-                    if 'method' not in kd_data:
-                        kd_data['method'] = 'KD'
-                    elif kd_data['method'].upper() != 'KD':
-                        raise ValueError(
-                            f"Invalid method in kd_config file '{path}': '{kd_data['method']}'. "
-                            f"Expected 'KD' but got '{kd_data['method']}'"
-                        )
-                    kd_cfg = DistillConfig.from_dict(kd_data)
-                else:
-                    raise TypeError(f"Unsupported kd_config type: {type(kd_config)}")
-            
-            # log_level assignment order: EdgeRazor => QAT => KD => default ERROR
-            if qat_cfg is not None and getattr(qat_cfg, 'log_level', None) is not None:
-                log_level = qat_cfg.log_level
-            elif kd_cfg is not None and getattr(kd_cfg, 'log_level', None) is not None:
-                log_level = kd_cfg.log_level
-            else:
-                log_level = logging.ERROR
-            
+            qat_cfg = cls._load_component_config(
+                qat_config, 'QAT', QuantConfig, 'qat_configuration'
+            ) if qat_config is not None else None
+
+            kd_cfg = cls._load_component_config(
+                kd_config, 'KD', DistillConfig.from_dict, 'kd_configuration'
+            ) if kd_config is not None else None
+
+            log_level = cls._resolve_log_level(
+                qat_config=qat_cfg, kd_config=kd_cfg, default=logging.ERROR
+            )
             return cls(qat_config=qat_cfg, kd_config=kd_cfg, log_level=log_level)
         
         raise ValueError("No configuration provided")
@@ -299,18 +271,57 @@ class EdgeRazorConfig:
                     kd_dict['method'] = 'KD'
                 kd_config = DistillConfig.from_dict(kd_dict)
         
-        # log_level assignment order: EdgeRazor => QAT => KD => default ERROR
-        if config_dict.get('log_level') is not None:
-            log_level = config_dict.get('log_level')
-        elif qat_config is not None and getattr(qat_config, 'log_level', None) is not None:
-            log_level = qat_config.log_level
-        elif kd_config is not None and getattr(kd_config, 'log_level', None) is not None:
-            log_level = kd_config.log_level
-        else:
-            log_level = logging.ERROR
-        
+        log_level = cls._resolve_log_level(
+            config_dict=config_dict, qat_config=qat_config,
+            kd_config=kd_config, default=logging.ERROR
+        )
         return cls(qat_config=qat_config, kd_config=kd_config, log_level=log_level)
-    
+
+    @classmethod
+    def _from_file(
+        cls,
+        file_path: Union[str, Path] | None,
+        sub_qat_path: Union[str, Path] | None,
+        sub_kd_path: Union[str, Path] | None,
+        reader_fn,
+        config_loader_name: str,
+        file_type: str,
+    ) -> "EdgeRazorConfig":
+        """Shared logic for from_yaml and from_json."""
+        if file_path is not None:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"Config file not found: {file_path}")
+            with open(file_path, 'r', encoding='utf-8') as f:
+                config_dict = reader_fn(f)
+            return cls.from_dict(config_dict)
+
+        if sub_qat_path is not None or sub_kd_path is not None:
+            qat_config = None
+            kd_config = None
+
+            if sub_qat_path is not None:
+                sub_qat_path = Path(sub_qat_path)
+                if not sub_qat_path.exists():
+                    raise FileNotFoundError(f"QAT config file not found: {sub_qat_path}")
+                qat_config = getattr(QuantConfig, config_loader_name)(sub_qat_path)
+
+            if sub_kd_path is not None:
+                sub_kd_path = Path(sub_kd_path)
+                if not sub_kd_path.exists():
+                    raise FileNotFoundError(f"KD config file not found: {sub_kd_path}")
+                kd_config = getattr(DistillConfig, config_loader_name)(sub_kd_path)
+
+            log_level = cls._resolve_log_level(
+                qat_config=qat_config, kd_config=kd_config, default=logging.ERROR
+            )
+            return cls(qat_config=qat_config, kd_config=kd_config, log_level=log_level)
+
+        raise ValueError(
+            f"Must provide either '{file_type}_path' (unified config) or "
+            f"'qat_{file_type}'/'kd_{file_type}' (separate configs)"
+        )
+
     @classmethod
     def from_yaml(
         cls,
@@ -318,78 +329,9 @@ class EdgeRazorConfig:
         qat_yaml: Union[str, Path] | None = None,
         kd_yaml: Union[str, Path] | None = None,
     ) -> "EdgeRazorConfig":
-        """
-        Load EdgeRazorConfig from YAML file(s).
-        
-        Args:
-            yaml_path: Path to unified YAML file containing both QAT and KD configurations
-            qat_yaml: Path to separate QAT YAML file (alternative to yaml_path)
-            kd_yaml: Path to separate KD YAML file (alternative to yaml_path)
-        
-        Returns:
-            EdgeRazorConfig instance
-        
-        Raises:
-            ValueError: If neither yaml_path nor (qat_yaml or kd_yaml) is provided
-            FileNotFoundError: If specified file does not exist
-        
-        Examples:
-            >>> # From unified config
-            >>> config = EdgeRazorConfig.from_yaml("unified_config.yaml")
-            
-            >>> # From separate configs
-            >>> config = EdgeRazorConfig.from_yaml(
-            ...     qat_yaml="qat_config.yaml",
-            ...     kd_yaml="kd_config.yaml"
-            ... )
-            
-            >>> # Only QAT
-            >>> config = EdgeRazorConfig.from_yaml(qat_yaml="qat_config.yaml")
-        """
-        qat_config = None
-        kd_config = None
-        
-        if yaml_path is not None:
-            # Load from unified configuration file
-            yaml_path = Path(yaml_path)
-            if not yaml_path.exists():
-                raise FileNotFoundError(f"Config file not found: {yaml_path}")
-            
-            with open(yaml_path, 'r', encoding='utf-8') as f:
-                config_dict = yaml.safe_load(f)
-            
-            return cls.from_dict(config_dict)
-        
-        elif qat_yaml is not None or kd_yaml is not None:
-            # Load from separate configuration files
-            if qat_yaml is not None:
-                qat_yaml = Path(qat_yaml)
-                if not qat_yaml.exists():
-                    raise FileNotFoundError(f"QAT config file not found: {qat_yaml}")
-                qat_config = QuantConfig.from_yaml(qat_yaml)
-            
-            if kd_yaml is not None:
-                kd_yaml = Path(kd_yaml)
-                if not kd_yaml.exists():
-                    raise FileNotFoundError(f"KD config file not found: {kd_yaml}")
-                kd_config = DistillConfig.from_yaml(kd_yaml)
-            
-            # log_level assignment order: EdgeRazor => QAT => KD => default ERROR
-            if qat_config is not None and getattr(qat_config, 'log_level', None) is not None:
-                log_level = qat_config.log_level
-            elif kd_config is not None and getattr(kd_config, 'log_level', None) is not None:
-                log_level = kd_config.log_level
-            else:
-                log_level = logging.ERROR
-            
-            return cls(qat_config=qat_config, kd_config=kd_config, log_level=log_level)
-        
-        else:
-            raise ValueError(
-                "Must provide either 'yaml_path' (unified config) or "
-                "'qat_yaml'/'kd_yaml' (separate configs)"
-            )
-    
+        """Load EdgeRazorConfig from YAML file(s)."""
+        return cls._from_file(yaml_path, qat_yaml, kd_yaml, yaml.safe_load, 'from_yaml', 'yaml')
+
     @classmethod
     def from_json(
         cls,
@@ -397,74 +339,8 @@ class EdgeRazorConfig:
         qat_json: Union[str, Path] | None = None,
         kd_json: Union[str, Path] | None = None,
     ) -> "EdgeRazorConfig":
-        """
-        Load EdgeRazorConfig from JSON file(s).
-        
-        Args:
-            json_path: Path to unified JSON file containing both QAT and KD configurations
-            qat_json: Path to separate QAT JSON file (alternative to json_path)
-            kd_json: Path to separate KD JSON file (alternative to json_path)
-        
-        Returns:
-            EdgeRazorConfig instance
-        
-        Raises:
-            ValueError: If neither json_path nor (qat_json or kd_json) is provided
-            FileNotFoundError: If specified file does not exist
-        
-        Examples:
-            >>> # From unified config
-            >>> config = EdgeRazorConfig.from_json("unified_config.json")
-            
-            >>> # From separate configs
-            >>> config = EdgeRazorConfig.from_json(
-            ...     qat_json="qat_config.json",
-            ...     kd_json="kd_config.json"
-            ... )
-        """
-        qat_config = None
-        kd_config = None
-        
-        if json_path is not None:
-            # Load from unified configuration file
-            json_path = Path(json_path)
-            if not json_path.exists():
-                raise FileNotFoundError(f"Config file not found: {json_path}")
-            
-            with open(json_path, 'r', encoding='utf-8') as f:
-                config_dict = json.load(f)
-            
-            return cls.from_dict(config_dict)
-        
-        elif qat_json is not None or kd_json is not None:
-            # Load from separate configuration files
-            if qat_json is not None:
-                qat_json = Path(qat_json)
-                if not qat_json.exists():
-                    raise FileNotFoundError(f"QAT config file not found: {qat_json}")
-                qat_config = QuantConfig.from_json(qat_json)
-            
-            if kd_json is not None:
-                kd_json = Path(kd_json)
-                if not kd_json.exists():
-                    raise FileNotFoundError(f"KD config file not found: {kd_json}")
-                kd_config = DistillConfig.from_json(kd_json)
-            
-            # log_level assignment order: EdgeRazor => QAT => KD => default ERROR
-            if qat_config is not None and getattr(qat_config, 'log_level', None) is not None:
-                log_level = qat_config.log_level
-            elif kd_config is not None and getattr(kd_config, 'log_level', None) is not None:
-                log_level = kd_config.log_level
-            else:
-                log_level = logging.ERROR
-            
-            return cls(qat_config=qat_config, kd_config=kd_config, log_level=log_level)
-        
-        else:
-            raise ValueError(
-                "Must provide either 'json_path' (unified config) or "
-                "'qat_json'/'kd_json' (separate configs)"
-            )
+        """Load EdgeRazorConfig from JSON file(s)."""
+        return cls._from_file(json_path, qat_json, kd_json, json.load, 'from_json', 'json')
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -513,7 +389,7 @@ class EdgeRazorConfig:
         json_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False, default=str)
     
     @property
     def has_qat(self) -> bool:
@@ -539,15 +415,6 @@ class EdgeRazorConfig:
             parts.append("KD=disabled")
         
         return f"EdgeRazorConfig({', '.join(parts)})"
-    
-    class JSONEncoder(json.JSONEncoder):
-        """Custom JSON encoder that handles EdgeRazorConfig objects."""
-        def default(self, obj):
-            if isinstance(obj, EdgeRazorConfig):
-                return obj.to_dict()
-            if hasattr(obj, 'to_dict'):
-                return obj.to_dict()
-            return super().default(obj)
     
     def __reduce__(self):
         """Support for pickle serialization."""

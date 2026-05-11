@@ -33,20 +33,24 @@ class QAT:
     - `4-bit`: {-8, -6, ..., 0, ..., 6, 7} * scaling_factor
     - `8-bit`: {-128, -127, ..., 0, ..., 127} * scaling_factor
     """
-    # Default quantized module classes
-    qlinear_cls_default = QLinear
-    qembedding_cls_default = QEmbedding
-    qconv1d_cls_default = QConv1d
-    qconv2d_cls_default = QConv2d
-    qconv3d_cls_default = QConv3d
-    qmultiheadattention_cls_default = QMultiheadAttention
-    qkvcacheolmoeattention_cls_default = QKVCacheOlmoeAttention
-    qkvcacheolmoeflashattention2_cls_default = QKVCacheOlmoeFlashAttention2
-    qkvcacheolmoesdpaattention_cls_default = QKVCacheOlmoeSdpaAttention
-    qkvcacheqwen2_5omniattention_cls_default = QKVCacheQwen2_5OmniAttention
-    qkvcacheqwen3attention_cls_default = QKVCacheQwen3Attention
-    qkvcacheqwen3moeattention_cls_default = QKVCacheQwen3MoeAttention
-    qkvcachellamaattention_cls_default = QKVCacheLlamaAttention
+    # Spec: (key, display_name, default_class)
+    # Order matters: subclasses must precede parent classes for correct isinstance matching.
+    _QCLASS_SPEC = [
+        ('qlinear_cls',                        'Linear',                QLinear),
+        ('qembedding_cls',                     'Embedding',             QEmbedding),
+        ('qconv1d_cls',                        'Conv1d',                QConv1d),
+        ('qconv2d_cls',                        'Conv2d',                QConv2d),
+        ('qconv3d_cls',                        'Conv3d',                QConv3d),
+        ('qmultiheadattention_cls',            'MultiheadAttention',    QMultiheadAttention),
+        # Subclass checks before parent OlmoeAttention
+        ('qkvcacheolmoeflashattention2_cls',   'OlmoeFlashAttention2',  QKVCacheOlmoeFlashAttention2),
+        ('qkvcacheolmoesdpaattention_cls',     'OlmoeSdpaAttention',    QKVCacheOlmoeSdpaAttention),
+        ('qkvcacheolmoeattention_cls',         'OlmoeAttention',        QKVCacheOlmoeAttention),
+        ('qkvcacheqwen2_5omniattention_cls',   'Qwen2_5OmniAttention',  QKVCacheQwen2_5OmniAttention),
+        ('qkvcacheqwen3attention_cls',         'Qwen3Attention',        QKVCacheQwen3Attention),
+        ('qkvcacheqwen3moeattention_cls',      'Qwen3MoeAttention',     QKVCacheQwen3MoeAttention),
+        ('qkvcachellamaattention_cls',         'LlamaAttention',        QKVCacheLlamaAttention),
+    ]
 
     def __init__(self, config: dict | str | Path | QuantConfig):
         """
@@ -198,148 +202,26 @@ class QAT:
 
         self.logger.info("=== End Configuration Details ===")
 
-    def _check_provided_qclass(
-        self,
-        qlinear_cls: nn.Module = None,
-        qembedding_cls: nn.Module = None,
-        qconv1d_cls: nn.Module = None,
-        qconv2d_cls: nn.Module = None,
-        qconv3d_cls: nn.Module = None,
-        qmultiheadattention_cls: nn.Module = None,
-        qkvcacheolmoeattention_cls: nn.Module = None,
-        qkvcacheolmoeflashattention2_cls: nn.Module = None,
-        qkvcacheolmoesdpaattention_cls: nn.Module = None,
-        qkvcacheqwen2_5omniattention_cls: nn.Module = None,
-        qkvcacheqwen3attention_cls: nn.Module = None,
-        qkvcacheqwen3moeattention_cls: nn.Module = None,
-        qkvcachellamaattention_cls: nn.Module = None,
-    ) -> dict:
+    def _resolve_qclass_map(self, **overrides):
         """
-        Check and use default quantized classes if not provided.
-        
+        Resolve quantized class map: use provided custom class or fall back to default.
+
         Args:
-            qlinear_cls: Custom quantized Linear class
-            qembedding_cls: Custom quantized Embedding class
-            qconv1d_cls: Custom quantized Conv1d class
-            qconv2d_cls: Custom quantized Conv2d class
-            qconv3d_cls: Custom quantized Conv3d class
-            qmultiheadattention_cls: Custom quantized MultiheadAttention class
-            qkvcacheolmoeattention_cls: Custom quantized QKVCacheOlmoeAttention class
-            qkvcacheolmoeflashattention2_cls: Custom quantized QKVCacheOlmoeFlashAttention2 class
-            qkvcacheolmoesdpaattention_cls: Custom quantized QKVCacheOlmoeSdpaAttention class
-            qkvcacheqwen2_5omniattention_cls: Custom quantized QKVCacheQwen2_5OmniAttention class
-            qkvcacheqwen3attention_cls: Custom quantized QKVCacheQwen3Attention class
-            qkvcacheqwen3moeattention_cls: Custom quantized QKVCacheQwen3MoeAttention class
-            
+            **overrides: Keyword arguments mapping spec keys to custom classes (or None).
+
         Returns:
-            Dictionary mapping class parameter names to their final classes
+            dict[str, type]: Mapping of spec keys to resolved classes.
         """
-        qclass_map = {}
-        
-        # Check QLinear
-        if qlinear_cls is None:
-            qclass_map['qlinear_cls'] = self.qlinear_cls_default
-            self.logger.info("Using default QLinear class for Linear layers")
-        else:
-            qclass_map['qlinear_cls'] = qlinear_cls
-            self.logger.info(f"Using custom {qlinear_cls.__name__} class for Linear layers")
-        
-        # Check QEmbedding
-        if qembedding_cls is None:
-            qclass_map['qembedding_cls'] = self.qembedding_cls_default
-            self.logger.info("Using default QEmbedding class for Embedding layers")
-        else:
-            qclass_map['qembedding_cls'] = qembedding_cls
-            self.logger.info(f"Using custom {qembedding_cls.__name__} class for Embedding layers")
-        
-        # Check QConv1d
-        if qconv1d_cls is None:
-            qclass_map['qconv1d_cls'] = self.qconv1d_cls_default
-            self.logger.info("Using default QConv1d class for Conv1d layers")
-        else:
-            qclass_map['qconv1d_cls'] = qconv1d_cls
-            self.logger.info(f"Using custom {qconv1d_cls.__name__} class for Conv1d layers")
-        
-        # Check QConv2d
-        if qconv2d_cls is None:
-            qclass_map['qconv2d_cls'] = self.qconv2d_cls_default
-            self.logger.info("Using default QConv2d class for Conv2d layers")
-        else:
-            qclass_map['qconv2d_cls'] = qconv2d_cls
-            self.logger.info(f"Using custom {qconv2d_cls.__name__} class for Conv2d layers")
-        
-        # Check QConv3d
-        if qconv3d_cls is None:
-            qclass_map['qconv3d_cls'] = self.qconv3d_cls_default
-            self.logger.info("Using default QConv3d class for Conv3d layers")
-        else:
-            qclass_map['qconv3d_cls'] = qconv3d_cls
-            self.logger.info(f"Using custom {qconv3d_cls.__name__} class for Conv3d layers")
-        
-        # Check QMultiheadAttention
-        if qmultiheadattention_cls is None:
-            qclass_map['qmultiheadattention_cls'] = self.qmultiheadattention_cls_default
-            self.logger.info("Using default QMultiheadAttention class for MultiheadAttention layers")
-        else:
-            qclass_map['qmultiheadattention_cls'] = qmultiheadattention_cls
-            self.logger.info(f"Using custom {qmultiheadattention_cls.__name__} class for MultiheadAttention layers")
-        
-        # Check QKVCacheOlmoeAttention
-        if qkvcacheolmoeattention_cls is None:
-            qclass_map['qkvcacheolmoeattention_cls'] = self.qkvcacheolmoeattention_cls_default
-            self.logger.info("Using default QKVCacheOlmoeAttention class for OlmoeAttention layers")
-        else:
-            qclass_map['qkvcacheolmoeattention_cls'] = qkvcacheolmoeattention_cls
-            self.logger.info(f"Using custom {qkvcacheolmoeattention_cls.__name__} class for OlmoeAttention layers")
-        
-        # Check QKVCacheOlmoeFlashAttention2
-        if qkvcacheolmoeflashattention2_cls is None:
-            qclass_map['qkvcacheolmoeflashattention2_cls'] = self.qkvcacheolmoeflashattention2_cls_default
-            self.logger.info("Using default QKVCacheOlmoeFlashAttention2 class for OlmoeFlashAttention2 layers")
-        else:
-            qclass_map['qkvcacheolmoeflashattention2_cls'] = qkvcacheolmoeflashattention2_cls
-            self.logger.info(f"Using custom {qkvcacheolmoeflashattention2_cls.__name__} class for OlmoeFlashAttention2 layers")
-        
-        # Check QKVCacheOlmoeSdpaAttention
-        if qkvcacheolmoesdpaattention_cls is None:
-            qclass_map['qkvcacheolmoesdpaattention_cls'] = self.qkvcacheolmoesdpaattention_cls_default
-            self.logger.info("Using default QKVCacheOlmoeSdpaAttention class for OlmoeSdpaAttention layers")
-        else:
-            qclass_map['qkvcacheolmoesdpaattention_cls'] = qkvcacheolmoesdpaattention_cls
-            self.logger.info(f"Using custom {qkvcacheolmoesdpaattention_cls.__name__} class for OlmoeSdpaAttention layers")
-        
-        # Check QKVCacheQwen2_5OmniAttention
-        if qkvcacheqwen2_5omniattention_cls is None:
-            qclass_map['qkvcacheqwen2_5omniattention_cls'] = self.qkvcacheqwen2_5omniattention_cls_default
-            self.logger.info("Using default QKVCacheQwen2_5OmniAttention class for Qwen2_5OmniAttention layers")
-        else:
-            qclass_map['qkvcacheqwen2_5omniattention_cls'] = qkvcacheqwen2_5omniattention_cls
-            self.logger.info(f"Using custom {qkvcacheqwen2_5omniattention_cls.__name__} class for Qwen2_5OmniAttention layers")
-        
-        # Check QKVCacheQwen3Attention
-        if qkvcacheqwen3attention_cls is None:
-            qclass_map['qkvcacheqwen3attention_cls'] = self.qkvcacheqwen3attention_cls_default
-            self.logger.info("Using default QKVCacheQwen3Attention class for Qwen3Attention layers")
-        else:
-            qclass_map['qkvcacheqwen3attention_cls'] = qkvcacheqwen3attention_cls
-            self.logger.info(f"Using custom {qkvcacheqwen3attention_cls.__name__} class for Qwen3Attention layers")
-        
-        # Check QKVCacheQwen3MoeAttention
-        if qkvcacheqwen3moeattention_cls is None:
-            qclass_map['qkvcacheqwen3moeattention_cls'] = self.qkvcacheqwen3moeattention_cls_default
-            self.logger.info("Using default QKVCacheQwen3MoeAttention class for Qwen3MoeAttention layers")
-        else:
-            qclass_map['qkvcacheqwen3moeattention_cls'] = qkvcacheqwen3moeattention_cls
-            self.logger.info(f"Using custom {qkvcacheqwen3moeattention_cls.__name__} class for Qwen3MoeAttention layers")
-        
-        # Check QKVCacheLlamaAttention
-        if qkvcachellamaattention_cls is None:
-            qclass_map['qkvcachellamaattention_cls'] = self.qkvcachellamaattention_cls_default
-            self.logger.info("Using default QKVCacheLlamaAttention class for LlamaAttention layers")
-        else:
-            qclass_map['qkvcachellamaattention_cls'] = qkvcachellamaattention_cls
-            self.logger.info(f"Using custom {qkvcachellamaattention_cls.__name__} class for LlamaAttention layers")
-        return qclass_map
+        result = {}
+        for key, display, default_cls in self._QCLASS_SPEC:
+            provided = overrides.get(key)
+            if provided is not None:
+                result[key] = provided
+                self.logger.info(f"Using custom {provided.__name__} class for {display} layers")
+            else:
+                result[key] = default_cls
+                self.logger.info(f"Using default {default_cls.__name__} class for {display} layers")
+        return result
 
     def quantize(
         self,
@@ -417,8 +299,8 @@ class QAT:
             self.logger.warning("Please check your selection configuration")
             return model
 
-        # Check and use default quantized classes if not provided
-        qclass_map = self._check_provided_qclass(
+        # Resolve quantized class map (custom or default)
+        qclass_map = self._resolve_qclass_map(
             qlinear_cls=qlinear_cls,
             qembedding_cls=qembedding_cls,
             qconv1d_cls=qconv1d_cls,
@@ -433,23 +315,7 @@ class QAT:
             qkvcacheqwen3moeattention_cls=qkvcacheqwen3moeattention_cls,
             qkvcachellamaattention_cls=qkvcachellamaattention_cls,
         )
-        
-        # Extract classes from map
-        qlinear_cls = qclass_map['qlinear_cls']
-        qembedding_cls = qclass_map['qembedding_cls']
-        qconv1d_cls = qclass_map['qconv1d_cls']
-        qconv2d_cls = qclass_map['qconv2d_cls']
-        qconv3d_cls = qclass_map['qconv3d_cls']
-        qmultiheadattention_cls = qclass_map['qmultiheadattention_cls']
-        qkvcacheolmoeattention_cls = qclass_map['qkvcacheolmoeattention_cls']
-        qkvcacheolmoeflashattention2_cls = qclass_map['qkvcacheolmoeflashattention2_cls']
-        qkvcacheolmoesdpaattention_cls = qclass_map['qkvcacheolmoesdpaattention_cls']
-        qkvcacheqwen2_5omniattention_cls = qclass_map['qkvcacheqwen2_5omniattention_cls']
-        qkvcacheqwen3attention_cls = qclass_map['qkvcacheqwen3attention_cls']
-        qkvcacheqwen3moeattention_cls = qclass_map['qkvcacheqwen3moeattention_cls']
-        qkvcachellamaattention_cls = qclass_map['qkvcachellamaattention_cls']
 
-        # Apply quantization
         self.logger.info("")
         self.logger.info("Applying quantization to selected modules...")
 
@@ -458,19 +324,7 @@ class QAT:
                 model=model,
                 quant_config=self.config,
                 selector=self.selector,
-                qlinear_cls=qlinear_cls,
-                qembedding_cls=qembedding_cls,
-                qconv1d_cls=qconv1d_cls,
-                qconv2d_cls=qconv2d_cls,
-                qconv3d_cls=qconv3d_cls,
-                qmultiheadattention_cls=qmultiheadattention_cls,
-                qkvcacheolmoeattention_cls=qkvcacheolmoeattention_cls,
-                qkvcacheolmoeflashattention2_cls=qkvcacheolmoeflashattention2_cls,
-                qkvcacheolmoesdpaattention_cls=qkvcacheolmoesdpaattention_cls,
-                qkvcacheqwen2_5omniattention_cls=qkvcacheqwen2_5omniattention_cls,
-                qkvcacheqwen3attention_cls=qkvcacheqwen3attention_cls,
-                qkvcacheqwen3moeattention_cls=qkvcacheqwen3moeattention_cls,
-                qkvcachellamaattention_cls=qkvcachellamaattention_cls,
+                **qclass_map,
             )
 
             self.logger.info("Quantization applied successfully!")
@@ -484,63 +338,21 @@ class QAT:
         self.logger.info("Quantization results:")
         self.logger.info("-" * 80)
 
-        # Count quantized modules
-        qlinear_count = 0
-        qembedding_count = 0
-        qconv1d_count = 0
-        qconv2d_count = 0
-        qconv3d_count = 0
-        qmultiheadattention_count = 0
-        qkvcacheolmoeattention_count = 0
-        qkvcacheolmoeflashattention2_count = 0
-        qkvcacheolmoesdpaattention_count = 0
-        qkvcacheqwen2_5omniattention_count = 0
-        qkvcacheqwen3attention_count = 0
-        qkvcacheqwen3moeattention_count = 0
-        qkvcachellamaattention_count = 0
+        # Count quantized modules by type
+        from collections import Counter
+        qclass_counts = Counter()
         for _, module in quantized_model.named_modules():
-            if isinstance(module, qlinear_cls):
-                qlinear_count += 1
-            elif isinstance(module, qembedding_cls):
-                qembedding_count += 1
-            elif isinstance(module, qconv1d_cls):
-                qconv1d_count += 1
-            elif isinstance(module, qconv2d_cls):
-                qconv2d_count += 1
-            elif isinstance(module, qconv3d_cls):
-                qconv3d_count += 1
-            elif isinstance(module, qmultiheadattention_cls):
-                qmultiheadattention_count += 1
-            # Check subclasses first before checking parent class OlmoeAttention
-            elif isinstance(module, qkvcacheolmoeflashattention2_cls):
-                qkvcacheolmoeflashattention2_count += 1
-            elif isinstance(module, qkvcacheolmoesdpaattention_cls):
-                qkvcacheolmoesdpaattention_count += 1
-            elif isinstance(module, qkvcacheolmoeattention_cls):
-                qkvcacheolmoeattention_count += 1
-            elif isinstance(module, qkvcacheqwen2_5omniattention_cls):
-                qkvcacheqwen2_5omniattention_count += 1
-            elif isinstance(module, qkvcacheqwen3attention_cls):
-                qkvcacheqwen3attention_count += 1
-            elif isinstance(module, qkvcacheqwen3moeattention_cls):
-                qkvcacheqwen3moeattention_count += 1
-            elif isinstance(module, qkvcachellamaattention_cls):
-                qkvcachellamaattention_count += 1
+            for key, _display, qclass in self._QCLASS_SPEC:
+                if isinstance(module, qclass):
+                    qclass_counts[key] += 1
+                    break
 
-        self.logger.info(f"  Quantized Linear modules: {qlinear_count}")
-        self.logger.info(f"  Quantized Embedding modules: {qembedding_count}")
-        self.logger.info(f"  Quantized Conv1d modules: {qconv1d_count}")
-        self.logger.info(f"  Quantized Conv2d modules: {qconv2d_count}")
-        self.logger.info(f"  Quantized Conv3d modules: {qconv3d_count}")
-        self.logger.info(f"  Quantized MultiheadAttention modules: {qmultiheadattention_count}")
-        self.logger.info(f"  Quantized OlmoeAttention modules: {qkvcacheolmoeattention_count}")
-        self.logger.info(f"  Quantized OlmoeFlashAttention2 modules: {qkvcacheolmoeflashattention2_count}")
-        self.logger.info(f"  Quantized OlmoeSdpaAttention modules: {qkvcacheolmoesdpaattention_count}")
-        self.logger.info(f"  Quantized Qwen2_5OmniAttention modules: {qkvcacheqwen2_5omniattention_count}")
-        self.logger.info(f"  Quantized Qwen3Attention modules: {qkvcacheqwen3attention_count}")
-        self.logger.info(f"  Quantized Qwen3MoeAttention modules: {qkvcacheqwen3moeattention_count}")
-        self.logger.info(f"  Quantized LlamaAttention modules: {qkvcachellamaattention_count}")
-        self.logger.info(f"  Total quantized modules: {qlinear_count + qembedding_count + qconv1d_count + qconv2d_count + qconv3d_count + qmultiheadattention_count + qkvcacheolmoeattention_count + qkvcacheolmoeflashattention2_count + qkvcacheolmoesdpaattention_count + qkvcacheqwen2_5omniattention_count + qkvcacheqwen3attention_count + qkvcacheqwen3moeattention_count + qkvcachellamaattention_count}")
+        for key, display, _qclass in self._QCLASS_SPEC:
+            count = qclass_counts.get(key, 0)
+            if count:
+                self.logger.info(f"  Quantized {display} modules: {count}")
+        total_quantized = sum(qclass_counts.values())
+        self.logger.info(f"  Total quantized modules: {total_quantized}")
         
         # Fix `tie_word_embeddings=True` issue
         model_class_name = quantized_model.__class__.__name__
@@ -555,10 +367,15 @@ class QAT:
         # Calculate quantized parameters using weight object ID deduplication
         # This prevents double-counting shared weights (e.g., tied embeddings)
         # qkvcache_xxxxxx_cls is state quantization only, so we do not count its parameters (weights) here
+        _weight_qclass_keys = (
+            'qlinear_cls', 'qembedding_cls', 'qconv1d_cls', 'qconv2d_cls',
+            'qconv3d_cls', 'qmultiheadattention_cls',
+        )
+        _weight_qclasses = tuple(qclass_map[k] for k in _weight_qclass_keys)
         counted_weight_ids = set()
         quantized_params = 0
         for _, module in quantized_model.named_modules():
-            if isinstance(module, (qlinear_cls, qembedding_cls, qconv1d_cls, qconv2d_cls, qconv3d_cls, qmultiheadattention_cls)):
+            if isinstance(module, _weight_qclasses):
                 if hasattr(module, 'weight') and module.weight is not None:
                     weight_id = id(module.weight)
                     if weight_id not in counted_weight_ids:
@@ -599,8 +416,7 @@ class QAT:
         self.logger.info("Starting replacement of quantized weights")
         self.logger.info("=" * 80)
         
-        # Check and use default quantized classes if not provided
-        qclass_map = self._check_provided_qclass(
+        qclass_map = self._resolve_qclass_map(
             qlinear_cls=qlinear_cls,
             qembedding_cls=qembedding_cls,
             qconv1d_cls=qconv1d_cls,
@@ -608,26 +424,13 @@ class QAT:
             qconv3d_cls=qconv3d_cls,
             qmultiheadattention_cls=qmultiheadattention_cls,
         )
-        
-        # Extract classes from map
-        qlinear_cls = qclass_map['qlinear_cls']
-        qembedding_cls = qclass_map['qembedding_cls']
-        qconv1d_cls = qclass_map['qconv1d_cls']
-        qconv2d_cls = qclass_map['qconv2d_cls']
-        qconv3d_cls = qclass_map['qconv3d_cls']
-        qmultiheadattention_cls = qclass_map['qmultiheadattention_cls']
 
         try:
             updated_model = replace_applied_quantized_weights(
                 model=model,
                 selector=self.selector,
-                qlinear_cls=qlinear_cls,
-                qembedding_cls=qembedding_cls,
-                qconv1d_cls=qconv1d_cls,
-                qconv2d_cls=qconv2d_cls,
-                qconv3d_cls=qconv3d_cls,
-                qmultiheadattention_cls=qmultiheadattention_cls,
                 replace_weights=True,
+                **qclass_map,
             )
 
             self.logger.info("Quantized weights replaced successfully!")
