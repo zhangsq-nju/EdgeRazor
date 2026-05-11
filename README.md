@@ -27,7 +27,7 @@
     ✨ If you like our project, please give us a star ⭐️ for the latest update.
   </h5>
 
-  <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/Demo.gif" alt="EdgeRazor Demo" width="75%">
+  <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/Demo-PC.gif" alt="EdgeRazor Demo" width="75%">
 </div>
 
 ---

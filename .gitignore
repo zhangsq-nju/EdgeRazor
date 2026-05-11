@@ -1,6 +1,6 @@
 ### Customized ###
-demo
-demo-*
+demo/
+demo-*/
 logs
 data
 runs
@@ -14,6 +14,9 @@ README_draft*.md
 *.log
 project_code.py
 project_code_all.py
+
+.claude
+.env
 
 # Disable related files after finishing the documentation-v1
 docs
