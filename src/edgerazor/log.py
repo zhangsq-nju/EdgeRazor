@@ -6,15 +6,24 @@ It includes specialized loggers for different components like QAT, distillation,
 """
 
 import logging
+import random
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
+
+try:
+    import pyfiglet
+    from colorama import Fore, Style, init as colorama_init
+    colorama_init()
+    _HAS_ASCII_ART = True
+except ImportError:
+    _HAS_ASCII_ART = False
 
 
 class EdgeRazorFormatter(logging.Formatter):
     """Custom formatter for EdgeRazor logs with color support and structured output."""
 
-    # Color codes for different log levels
     COLORS = {
         'DEBUG': '\033[36m',      # Cyan
         'INFO': '\033[32m',       # Green
@@ -25,152 +34,149 @@ class EdgeRazorFormatter(logging.Formatter):
     }
 
     def format(self, record):
-        # Add color to log level name
-        if hasattr(record, 'levelname'):
-            color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
-            colored_levelname = f"{color}{record.levelname:8s}{self.COLORS['RESET']}"
-        else:
-            colored_levelname = record.levelname
-
-        # Create custom format with component information
+        color = self.COLORS.get(record.levelname, self.COLORS['RESET'])
+        colored_levelname = f"{color}{record.levelname:8s}{self.COLORS['RESET']}"
         component = getattr(record, 'component', 'EdgeRazor')
         timestamp = datetime.fromtimestamp(record.created).strftime('%H:%M:%S.%f')[:-3]
-
-        # Format: [HH:MM:SS.mmm] [LEVEL] [Component] Message
-        formatted_msg = f"[{timestamp}] [{colored_levelname}] [{component:>8s}] {record.getMessage()}"
-
-        # Add exception info if present
+        formatted_msg = f"[{timestamp}] [{colored_levelname}] [{component:<10s}] {record.getMessage()}"
         if record.exc_info:
             formatted_msg += f"\n{self.formatException(record.exc_info)}"
-
         return formatted_msg
 
 
-class EdgeRazorLogger:
+# Module-level state to avoid mutable class-variable sharing across instances.
+_loggers: dict[str, logging.Logger] = {}
+_component_levels: dict[str, int] = {}
+_console_handler: logging.StreamHandler | None = None
+_file_handler: logging.FileHandler | None = None
+_global_level: int = logging.INFO
+_initialized: bool = False
+_logo_printed: bool = False
+_lock: threading.Lock = threading.Lock()
+
+_formatter = EdgeRazorFormatter()
+
+
+def setup_logging(
+    level: str | int = logging.INFO,
+    log_file: str | Path | None = None,
+    console_output: bool = True,
+) -> None:
     """
-    Centralized logger for EdgeRazor framework.
-    
-    Provides component-specific logging with consistent formatting and multiple output options.
+    Setup the global logging configuration for EdgeRazor.
+
+    Args:
+        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+        log_file: Optional file path for log output.
+        console_output: Whether to output logs to console.
     """
+    global _initialized, _console_handler, _file_handler, _global_level
 
-    _loggers = {}
-    _initialized = False
+    if _initialized:
+        return
 
-    @classmethod
-    def setup_logging(cls,
-                     level: str | int = logging.INFO,
-                     log_file: str | Path | None = None,
-                     console_output: bool = True) -> None:
-        """
-        Setup the global logging configuration for EdgeRazor.
-        
-        Args:
-            level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-            log_file: Optional file path for log output
-            console_output: Whether to output logs to console
-        """
-        if cls._initialized:
-            return
+    if isinstance(level, str):
+        level = getattr(logging, level.upper())
 
-        # Convert string level to logging constant
-        if isinstance(level, str):
-            level = getattr(logging, level.upper())
+    _global_level = level
 
-        # Create custom formatter
-        formatter = EdgeRazorFormatter()
+    if console_output:
+        _console_handler = logging.StreamHandler(sys.stdout)
+        _console_handler.setFormatter(_formatter)
+        _console_handler.setLevel(logging.DEBUG)
 
-        # Setup console handler
-        if console_output:
-            console_handler = logging.StreamHandler(sys.stdout)
-            console_handler.setFormatter(formatter)
-            console_handler.setLevel(level)
+    if log_file:
+        log_path = Path(log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        _file_handler = logging.FileHandler(log_path, encoding='utf-8')
+        _file_handler.setFormatter(_formatter)
+        _file_handler.setLevel(logging.DEBUG)
 
-        # Setup file handler if specified
-        file_handler = None
-        if log_file:
-            log_path = Path(log_file)
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.FileHandler(log_path, encoding='utf-8')
-            file_handler.setFormatter(formatter)
-            file_handler.setLevel(level)
+    _initialized = True
 
-        # Store handlers for component loggers
-        cls._console_handler = console_handler if console_output else None
-        cls._file_handler = file_handler
-        cls._level = level
-        cls._initialized = True
 
-    @classmethod
-    def get_logger(cls, component: str) -> logging.Logger:
-        """
-        Get a logger for a specific component.
-        
-        Args:
-            component: Component name (e.g., 'QAT', 'Distill', 'Config')
-            
-        Returns:
-            Logger instance for the component
-        """
-        if not cls._initialized:
-            cls.setup_logging()
+def set_component_level(component: str, level: str | int) -> None:
+    """
+    Set the logging level for a specific component.
 
-        if component not in cls._loggers:
-            logger = logging.getLogger(f"EdgeRazor.{component}")
-            logger.setLevel(cls._level)
+    This overrides the global level for the named component.
+    Call before or after get_logger — existing loggers are updated in-place.
 
-            # Clear any existing handlers
-            logger.handlers.clear()
-            logger.propagate = False
+    Args:
+        component: Component name (e.g. 'QAT', 'KD').
+        level: Logging level.
+    """
+    if isinstance(level, str):
+        level = getattr(logging, level.upper())
+    _component_levels[component] = level
 
-            # Add configured handlers
-            if cls._console_handler:
-                logger.addHandler(cls._console_handler)
-            if cls._file_handler:
-                logger.addHandler(cls._file_handler)
+    if component in _loggers:
+        _loggers[component].setLevel(level)
 
-            # Store original log methods and create component-aware versions
-            original_debug = logger.debug
-            original_info = logger.info
-            original_warning = logger.warning
-            original_error = logger.error
-            original_critical = logger.critical
 
-            def make_component_method(original_method):
-                def component_method(msg, *args, **kwargs):
-                    # Add component info to extra data
-                    if 'extra' not in kwargs:
-                        kwargs['extra'] = {}
-                    kwargs['extra']['component'] = component
-                    return original_method(msg, *args, **kwargs)
-                return component_method
-
-            logger.debug = make_component_method(original_debug)
-            logger.info = make_component_method(original_info)
-            logger.warning = make_component_method(original_warning)
-            logger.error = make_component_method(original_error)
-            logger.critical = make_component_method(original_critical)
-
-            cls._loggers[component] = logger
-
-        return cls._loggers[component]
+def _make_component_method(original_method, component: str):
+    """Create a wrapper that merges component info into the log record's extra dict."""
+    def component_method(msg, *args, **kwargs):
+        extra = dict(kwargs.get('extra', {}))
+        extra['component'] = component
+        kwargs['extra'] = extra
+        return original_method(msg, *args, **kwargs)
+    return component_method
 
 
 def get_logger(component: str) -> logging.Logger:
     """
-    Convenience function to get a component logger.
-    
+    Get a logger for a specific component.
+
     Args:
-        component: Component name
-        
+        component: Component name (e.g. 'QAT', 'KD', 'EdgeRazor').
+
     Returns:
-        Logger instance
+        Logger instance for the component.
     """
-    return EdgeRazorLogger.get_logger(component)
+    if not _initialized:
+        setup_logging()
+
+    if component not in _loggers:
+        with _lock:
+            if component not in _loggers:
+                logger = logging.getLogger(f"EdgeRazor.{component}")
+                level = _component_levels.get(component, _global_level)
+                logger.setLevel(level)
+                logger.handlers.clear()
+                logger.propagate = False
+
+                if _console_handler:
+                    logger.addHandler(_console_handler)
+                if _file_handler:
+                    logger.addHandler(_file_handler)
+
+                logger.debug = _make_component_method(logger.debug, component)
+                logger.info = _make_component_method(logger.info, component)
+                logger.warning = _make_component_method(logger.warning, component)
+                logger.error = _make_component_method(logger.error, component)
+                logger.critical = _make_component_method(logger.critical, component)
+
+                _loggers[component] = logger
+
+    return _loggers[component]
 
 
-def setup_logging(**kwargs):
-    """Convenience function to setup logging.
-    Example:
-        setup_logging(level='ERROR')
-    """
-    return EdgeRazorLogger.setup_logging(**kwargs)
+def print_logo() -> None:
+    """Print the EdgeRazor ASCII art logo once with a randomly selected font."""
+    global _logo_printed
+    if _logo_printed:
+        return
+    _logo_printed = True
+
+    if not _HAS_ASCII_ART:
+        print("EdgeRazor")
+        return
+
+    fonts = ["slant", "cyberlarge", "ansi_shadow"]
+    font = random.choice(fonts)
+    try:
+        result = pyfiglet.figlet_format("EdgeRazor", font=font)
+        print(Fore.CYAN + result + Style.RESET_ALL)
+    except pyfiglet.FontNotFound:
+        print(Fore.YELLOW + "EdgeRazor" + Style.RESET_ALL)

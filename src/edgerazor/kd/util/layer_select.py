@@ -1,15 +1,15 @@
 # ruff: noqa N812
+import logging
+
 import torch
 from torch.nn import functional as F
-
-from ...log import EdgeRazorLogger
 
 
 def resolve_layer_indices(
     layer_indices: list[int | str],
     num_layers: int,
     loss_key: str,
-    logger: EdgeRazorLogger,
+    logger: logging.Logger,
 ) -> list[int]:
     # Resolve string layer names to actual indices
     resolved_indices = []

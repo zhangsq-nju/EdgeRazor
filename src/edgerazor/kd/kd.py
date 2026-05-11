@@ -128,7 +128,7 @@ class KD:
         for loss_key, loss_config in self.config.losses.items():
             loss_fn = get_distill_function(loss_config.loss_function)
             self.loss_functions[loss_key] = loss_fn
-            self.logger.info(
+            self.logger.debug(
                 f'Registered {loss_key}: '
                 f'type={loss_config.loss_type}, '
                 f'function={loss_config.loss_function}, '
@@ -156,21 +156,23 @@ class KD:
             if isinstance(config, DistillConfig):
                 self.logger.info('Using provided DistillConfig object')
                 return config
-            
+
             # Python dictionary
             elif isinstance(config, dict):
                 self.logger.info('Loading configuration from dictionary')
                 return DistillConfig.from_dict(config)
-            
+
             # File path (YAML or JSON)
             elif isinstance(config, (str, Path)):
                 config_path = Path(config)
                 self.logger.info(f'Loading configuration from: {config_path}')
-                
+
                 suffix = config_path.suffix.lower()
                 if suffix in ['.yaml', '.yml']:
+                    self.logger.debug('Configuration loaded from YAML file')
                     return DistillConfig.from_yaml(config_path)
                 elif suffix == '.json':
+                    self.logger.debug('Configuration loaded from JSON file')
                     return DistillConfig.from_json(config_path)
                 else:
                     raise ValueError(
@@ -190,29 +192,27 @@ class KD:
             raise
     
     def _log_configuration(self):
-        """Log configuration details."""
-        self.logger.info('=' * 80)
-        self.logger.info('KD Configuration')
-        self.logger.info('=' * 80)
-        self.logger.info(f'Method: {self.config.method}')
-        self.logger.info(f'Task loss alpha: {self.config.loss_task_alpha}')
-        self.logger.info(f'Number of losses: {len(self.config.losses)}')
-        self.logger.info('')
-        
+        """Log configuration details at DEBUG level."""
+        self.logger.debug('=' * 80)
+        self.logger.debug('KD Configuration')
+        self.logger.debug('=' * 80)
+        self.logger.debug(f'Method: {self.config.method}')
+        self.logger.debug(f'Task loss alpha: {self.config.loss_task_alpha}')
+        self.logger.debug(f'Number of losses: {len(self.config.losses)}')
+
         for loss_key, loss_config in self.config.losses.items():
-            self.logger.info(f'{loss_key}:')
-            self.logger.info(f'  loss_type:     {loss_config.loss_type}')
-            self.logger.info(f'  loss_function: {loss_config.loss_function}')
-            self.logger.info(f'  alpha:         {loss_config.alpha}')
-            
+            self.logger.debug(f'{loss_key}:')
+            self.logger.debug(f'  loss_type:     {loss_config.loss_type}')
+            self.logger.debug(f'  loss_function: {loss_config.loss_function}')
+            self.logger.debug(f'  alpha:         {loss_config.alpha}')
+
             if loss_config.loss_type == 'logits':
-                self.logger.info(f'  temperature:   {loss_config.temperature}')
-                self.logger.info(f'  use_entropy:   {loss_config.use_entropy}')
-            
-            self.logger.info(f'  reduction:     {loss_config.reduction}')
-            self.logger.info('')
-        
-        self.logger.info('=' * 80)
+                self.logger.debug(f'  temperature:   {loss_config.temperature}')
+                self.logger.debug(f'  use_entropy:   {loss_config.use_entropy}')
+
+            self.logger.debug(f'  reduction:     {loss_config.reduction}')
+
+        self.logger.debug('=' * 80)
     
     def compute_loss(
         self,

@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from .edgerazor_config import EdgeRazorConfig
 from .kd import KD
-from .log import get_logger, setup_logging
+from .log import get_logger, print_logo, set_component_level, setup_logging
 from .qat import QAT
 
 
@@ -66,22 +66,36 @@ class EdgeRazor:
         """
         # Load configuration using EdgeRazorConfig.load()
         edge_config = EdgeRazorConfig.load(config, qat_config, kd_config)
-        
-        # Initialize logging
+
+        # Print logo on first EdgeRazor startup
+        print_logo()
+
+        # Initialize logging with resolved log level
+        setup_logging(level=edge_config.log_level)
+
+        # Set per-component log levels from individual configs.
+        # When a top-level log_level is set in the unified config it overrides
+        # all component-specific levels, so we skip per-component setup.
+        if not getattr(edge_config, '_has_top_level_log', False):
+            if edge_config.has_qat and edge_config.qat_config is not None:
+                set_component_level('QAT', edge_config.qat_config.log_level)
+            if edge_config.has_kd and edge_config.kd_config is not None:
+                set_component_level('KD', edge_config.kd_config.log_level)
+
         self.logger = get_logger('EdgeRazor')
-        
+
         # Initialize QAT and KD modules
         self.model = None
         self.qat = QAT(edge_config.qat_config.to_dict()) if edge_config.has_qat else None
         self.kd = KD(edge_config.kd_config.to_dict()) if edge_config.has_kd else None
-        
+
         # Log initialization status
         status = []
         if self.qat:
             status.append("QAT")
         if self.kd:
             status.append("KD")
-        
+
         self.logger.info(
             f"EdgeRazor initialized ({' + '.join(status)} enabled | Log Level: {edge_config.log_level})"
             if status else "EdgeRazor initialized (no modules)"

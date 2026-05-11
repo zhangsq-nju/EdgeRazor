@@ -85,10 +85,13 @@ class EdgeRazorConfig:
         self.qat_config = qat_config
         self.kd_config = kd_config
         self.log_level = log_level
+        # Whether the log_level came from a top-level unified config key
+        # (as opposed to being resolved from component configs).
+        self._has_top_level_log = False
     
     @staticmethod
-    def _resolve_log_level(config_dict=None, qat_config=None, kd_config=None, default=logging.ERROR):
-        """Resolve log_level with priority: EdgeRazor > QAT > KD > default."""
+    def _resolve_log_level(config_dict=None, qat_config=None, kd_config=None, default=logging.INFO):
+        """Resolve log_level with priority: EdgeRazor top-level > QAT > KD > default."""
         if config_dict and config_dict.get('log_level') is not None:
             return config_dict.get('log_level')
         if qat_config is not None and getattr(qat_config, 'log_level', None) is not None:
@@ -200,7 +203,7 @@ class EdgeRazorConfig:
             ) if kd_config is not None else None
 
             log_level = cls._resolve_log_level(
-                qat_config=qat_cfg, kd_config=kd_cfg, default=logging.ERROR
+                qat_config=qat_cfg, kd_config=kd_cfg, default=logging.INFO
             )
             return cls(qat_config=qat_cfg, kd_config=kd_cfg, log_level=log_level)
         
@@ -273,9 +276,13 @@ class EdgeRazorConfig:
         
         log_level = cls._resolve_log_level(
             config_dict=config_dict, qat_config=qat_config,
-            kd_config=kd_config, default=logging.ERROR
+            kd_config=kd_config, default=logging.INFO
         )
-        return cls(qat_config=qat_config, kd_config=kd_config, log_level=log_level)
+        instance = cls(qat_config=qat_config, kd_config=kd_config, log_level=log_level)
+        # Mark if the log_level came from a top-level key in the unified config dict
+        if config_dict and 'log_level' in config_dict:
+            instance._has_top_level_log = True
+        return instance
 
     @classmethod
     def _from_file(
@@ -313,7 +320,7 @@ class EdgeRazorConfig:
                 kd_config = getattr(DistillConfig, config_loader_name)(sub_kd_path)
 
             log_level = cls._resolve_log_level(
-                qat_config=qat_config, kd_config=kd_config, default=logging.ERROR
+                qat_config=qat_config, kd_config=kd_config, default=logging.INFO
             )
             return cls(qat_config=qat_config, kd_config=kd_config, log_level=log_level)
 

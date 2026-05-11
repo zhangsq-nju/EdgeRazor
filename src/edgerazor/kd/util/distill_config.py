@@ -151,8 +151,8 @@ class DistillConfig:
         config_dict['losses'] = losses
         
         if 'log_level' in config_dict:
-            cls.log_level = config_dict.get('log_level')
-        
+            config_dict['log_level'] = config_dict.get('log_level')
+
         return cls(**config_dict)
     
     @classmethod

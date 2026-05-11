@@ -115,28 +115,25 @@ class QAT:
         """
         try:
             if isinstance(config, QuantConfig):
-                # Already a QuantConfig object - use directly
                 self.logger.info("Using provided QuantConfig object")
                 return config
-                
+
             elif isinstance(config, dict):
-                # Python dictionary - construct QuantConfig
                 self.logger.info("Loading configuration from Python dictionary")
                 return QuantConfig(config)
-                
+
             elif isinstance(config, (str, Path)):
-                # File path - detect format by extension
                 config_path = Path(config) if isinstance(config, str) else config
                 self.logger.info(f"Loading configuration from: {config_path}")
-                
+
                 suffix = config_path.suffix.lower()
                 if suffix in ['.yaml', '.yml']:
                     loaded_config = QuantConfig.from_yaml(config_path)
-                    self.logger.info("Configuration loaded from YAML file")
+                    self.logger.debug("Configuration loaded from YAML file")
                     return loaded_config
                 elif suffix == '.json':
                     loaded_config = QuantConfig.from_json(config_path)
-                    self.logger.info("Configuration loaded from JSON file")
+                    self.logger.debug("Configuration loaded from JSON file")
                     return loaded_config
                 else:
                     raise ValueError(
@@ -154,53 +151,53 @@ class QAT:
             raise
 
     def _log_configuration(self):
-        """Log detailed configuration information."""
-        self.logger.info("=== QAT Configuration Details ===")
+        """Log detailed configuration information at DEBUG level."""
+        self.logger.debug("=== QAT Configuration Details ===")
 
         # Log method
-        self.logger.info(f"Method: {self.config.method}")
+        self.logger.debug(f"Method: {self.config.method}")
 
         # Log function configuration
-        self.logger.info("Function Configuration (Global Defaults):")
-        self.logger.info(f"  Weight: {self.config.function.weight_function}")
-        self.logger.info(f"    Scale Factor: {self.config.function.w_scale_factor}")
-        self.logger.info(f"    Block Size: {self.config.function.w_block_size}")
-        self.logger.info(f"    Mixed Precision Prop: {self.config.function.w_mixed_precision_prop}")
-        self.logger.info(f"    Is Quantized: {self.config.function.is_w_quantized}")
-        self.logger.info(f"  State (Activation): {self.config.function.activation_function}")
-        self.logger.info(f"    Block Size: {self.config.function.a_block_size}")
-        self.logger.info(f"    Mixed Precision Prop: {self.config.function.a_mixed_precision_prop}")
-        self.logger.info(f"  State (KV Cache): {self.config.function.kv_cache_function}")
-        self.logger.info(f"    Block Size: {self.config.function.kv_block_size}")
-        self.logger.info(f"    Mixed Precision Prop: {self.config.function.kv_mixed_precision_prop}")
-        self.logger.info(f"  Epsilon: {self.config.function.epsilon}")
+        self.logger.debug("Function Configuration (Global Defaults):")
+        self.logger.debug(f"  Weight: {self.config.function.weight_function}")
+        self.logger.debug(f"    Scale Factor: {self.config.function.w_scale_factor}")
+        self.logger.debug(f"    Block Size: {self.config.function.w_block_size}")
+        self.logger.debug(f"    Mixed Precision Prop: {self.config.function.w_mixed_precision_prop}")
+        self.logger.debug(f"    Is Quantized: {self.config.function.is_w_quantized}")
+        self.logger.debug(f"  State (Activation): {self.config.function.activation_function}")
+        self.logger.debug(f"    Block Size: {self.config.function.a_block_size}")
+        self.logger.debug(f"    Mixed Precision Prop: {self.config.function.a_mixed_precision_prop}")
+        self.logger.debug(f"  State (KV Cache): {self.config.function.kv_cache_function}")
+        self.logger.debug(f"    Block Size: {self.config.function.kv_block_size}")
+        self.logger.debug(f"    Mixed Precision Prop: {self.config.function.kv_mixed_precision_prop}")
+        self.logger.debug(f"  Epsilon: {self.config.function.epsilon}")
 
         # Log overrides if any
         if hasattr(self.config, 'overrides') and self.config.overrides:
-            self.logger.info(f"Per-Layer Overrides: {len(self.config.overrides)} rule(s) defined")
+            self.logger.debug(f"Per-Layer Overrides: {len(self.config.overrides)} rule(s) defined")
             for idx, override in enumerate(self.config.overrides, 1):
                 override_desc = []
                 if override.module_type:
                     override_desc.append(f"type={override.module_type}")
                 if override.module_name:
                     override_desc.append(f"name={override.module_name}")
-                self.logger.info(f"  Override {idx}: [{', '.join(override_desc)}]")
+                self.logger.debug(f"  Override {idx}: [{', '.join(override_desc)}]")
                 for key, value in override.overrides.items():
-                    self.logger.info(f"    {key}: {value}")
+                    self.logger.debug(f"    {key}: {value}")
         else:
-            self.logger.info("Per-Layer Overrides: None")
+            self.logger.debug("Per-Layer Overrides: None")
 
         # Log selection configuration
-        self.logger.info("Selection Configuration:")
-        self.logger.info(f"  Target Types: {self.config.select.target_types}")
-        self.logger.info(f"  Target Names: {self.config.select.target_names}")
-        self.logger.info(f"  Exclude Types: {self.config.select.exclude_types}")
-        self.logger.info(f"  Exclude Names: {self.config.select.exclude_names}")
+        self.logger.debug("Selection Configuration:")
+        self.logger.debug(f"  Target Types: {self.config.select.target_types}")
+        self.logger.debug(f"  Target Names: {self.config.select.target_names}")
+        self.logger.debug(f"  Exclude Types: {self.config.select.exclude_types}")
+        self.logger.debug(f"  Exclude Names: {self.config.select.exclude_names}")
 
         # Log training configuration
-        self.logger.info(f"Training: {self.config.training}")
+        self.logger.debug(f"Training: {self.config.training}")
 
-        self.logger.info("=== End Configuration Details ===")
+        self.logger.debug("=== End Configuration Details ===")
 
     def _resolve_qclass_map(self, **overrides):
         """
@@ -217,10 +214,10 @@ class QAT:
             provided = overrides.get(key)
             if provided is not None:
                 result[key] = provided
-                self.logger.info(f"Using custom {provided.__name__} class for {display} layers")
+                self.logger.debug(f"Using custom {provided.__name__} class for {display} layers")
             else:
                 result[key] = default_cls
-                self.logger.info(f"Using default {default_cls.__name__} class for {display} layers")
+                self.logger.debug(f"Using default {default_cls.__name__} class for {display} layers")
         return result
 
     def quantize(
@@ -262,37 +259,37 @@ class QAT:
         Returns:
             Quantized model
         """
-        self.logger.info("=" * 80)
-        self.logger.info("Starting model quantization")
-        self.logger.info("=" * 80)
+        self.logger.info("Starting model quantization…")
+        self.logger.debug("=" * 80)
+        self.logger.debug("Starting model quantization")
+        self.logger.debug("=" * 80)
 
         # Log model information
-        self.logger.info(f"Model type: {type(model).__name__}")
+        self.logger.debug(f"Model type: {type(model).__name__}")
 
         # Count total parameters
         total_params = sum(p.numel() for p in model.parameters())
-        self.logger.info(f"Total parameters: {total_params:,}")
+        self.logger.debug(f"Total parameters: {total_params:,}")
 
         # Analyze model structure and generate quantization plan
-        self.logger.info("Analyzing model structure...")
+        self.logger.debug("Analyzing model structure...")
         quant_map = self.selector.analyze_model(model)
 
         # Log analysis results
         total_modules = len(quant_map)
         modules_to_quantize = len(self.selector.get_modules_to_quantize())
-        self.logger.info(f"Total modules analyzed: {total_modules}")
-        self.logger.info(f"Modules to quantize: {modules_to_quantize}")
-        self.logger.info(f"Modules to skip: {total_modules - modules_to_quantize}")
+        self.logger.debug(f"Total modules analyzed: {total_modules}")
+        self.logger.debug(f"Modules to quantize: {modules_to_quantize}")
+        self.logger.debug(f"Modules to skip: {total_modules - modules_to_quantize}")
 
         # Print detailed quantization plan
-        self.logger.info("")
-        self.logger.info("Detailed quantization plan:")
-        self.logger.info("-" * 80)
+        self.logger.debug("--- Detailed quantization plan ---")
+        self.logger.debug("-" * 80)
         for name, info in sorted(quant_map.items()):
             status = "✓ QUANT" if info.should_quant else "✗ SKIP"
             module_type = info.module_type.__name__
-            self.logger.info(f"  {status:<10} {name:<30} [{module_type}]")
-        self.logger.info("-" * 80)
+            self.logger.debug(f"  {status:<10} {name:<30} [{module_type}]")
+        self.logger.debug("-" * 80)
 
         if modules_to_quantize == 0:
             self.logger.warning("No modules selected for quantization!")
@@ -316,7 +313,6 @@ class QAT:
             qkvcachellamaattention_cls=qkvcachellamaattention_cls,
         )
 
-        self.logger.info("")
         self.logger.info("Applying quantization to selected modules...")
 
         try:
@@ -334,9 +330,9 @@ class QAT:
             raise
 
         # Log quantization results
-        self.logger.info("")
-        self.logger.info("Quantization results:")
-        self.logger.info("-" * 80)
+        self.logger.debug("-" * 80)
+        self.logger.debug("Quantization results:")
+        self.logger.debug("-" * 80)
 
         # Count quantized modules by type
         from collections import Counter
@@ -350,19 +346,18 @@ class QAT:
         for key, display, _qclass in self._QCLASS_SPEC:
             count = qclass_counts.get(key, 0)
             if count:
-                self.logger.info(f"  Quantized {display} modules: {count}")
+                self.logger.debug(f"  Quantized {display} modules: {count}")
         total_quantized = sum(qclass_counts.values())
-        self.logger.info(f"  Total quantized modules: {total_quantized}")
+        self.logger.debug(f"  Total quantized modules: {total_quantized}")
         
         # Fix `tie_word_embeddings=True` issue
         model_class_name = quantized_model.__class__.__name__
         if isinstance(quantized_model, (PreTrainedModel, )) and ('CausalLM' in model_class_name or 'GPT' in model_class_name):
             if quantized_model.config.tie_word_embeddings:
-                # quantized_model.model.embed_tokens.weight = quantized_model.lm_head.weight # Manual handling
-                quantized_model.tie_weights() # PreTrainedModel API handling
-            self.logger.info(f"  Quantized model tie_word_embeddings: {quantized_model.config.tie_word_embeddings}")
+                quantized_model.tie_weights()
+            self.logger.debug(f"  Quantized model tie_word_embeddings: {quantized_model.config.tie_word_embeddings}")
         else:
-            self.logger.info("  Quantized model is not a CausalLM/GPT model or does not use tie_word_embeddings")
+            self.logger.debug("  Quantized model is not a CausalLM/GPT model or does not use tie_word_embeddings")
 
         # Calculate quantized parameters using weight object ID deduplication
         # This prevents double-counting shared weights (e.g., tied embeddings)
@@ -382,14 +377,11 @@ class QAT:
                         quantized_params += module.weight.numel()
                         counted_weight_ids.add(weight_id)
         
-        self.logger.info(f"  Quantized parameters: {quantized_params:,} ({quantized_params/total_params*100:.10f}%)")
-        self.logger.info(f"  Unique weight objects: {len(counted_weight_ids)}")
+        self.logger.debug(f"  Quantized parameters: {quantized_params:,} ({quantized_params/total_params*100:.10f}%)")
+        self.logger.debug(f"  Unique weight objects: {len(counted_weight_ids)}")
 
-        self.logger.info("-" * 80)
-        self.logger.info("")
-        self.logger.info("=" * 80)
+        self.logger.debug("-" * 80)
         self.logger.info("Model quantization completed successfully!")
-        self.logger.info("=" * 80)
 
         return quantized_model
 
@@ -412,9 +404,10 @@ class QAT:
         Returns:
             Model with quantized weights
         """
-        self.logger.info("=" * 80)
-        self.logger.info("Starting replacement of quantized weights")
-        self.logger.info("=" * 80)
+        self.logger.info("Starting replacement of quantized weights…")
+        self.logger.debug("=" * 80)
+        self.logger.debug("Starting replacement of quantized weights")
+        self.logger.debug("=" * 80)
         
         qclass_map = self._resolve_qclass_map(
             qlinear_cls=qlinear_cls,
@@ -439,8 +432,8 @@ class QAT:
             self.logger.error(f"Failed to replace quantized weights: {e}")
             raise
 
-        self.logger.info("=" * 80)
-        self.logger.info("Replacement of quantized weights completed successfully!")
-        self.logger.info("=" * 80)
+        self.logger.debug("=" * 80)
+        self.logger.debug("Replacement of quantized weights completed successfully!")
+        self.logger.debug("=" * 80)
 
         return updated_model
