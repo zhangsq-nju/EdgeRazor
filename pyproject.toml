@@ -8,7 +8,7 @@ Homepage = "https://github.com/zhangsq-nju/EdgeRazor"
 name = "edgerazor"
 version = "1.2.8"
 description = "EdgeRazor: Lightweight framework for Edge AI."
-readme = "README.md"
+readme = "./asset/README_pypi.md"
 requires-python = "==3.10.20"
 license = { text = "Apache 2.0" }
 authors = [

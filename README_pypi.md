@@ -2,7 +2,7 @@
   <br/>
   <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/Logo-full.png" alt="EdgeRazor Logo" width="60%">
   <h3>
-    端侧 AI 的轻量化框架
+    Lightweight Framework for Edge AI
   </h3>
 
   <p>
@@ -22,64 +22,63 @@
       <img src="https://img.shields.io/badge/License-Apache_2.0-green?logo=opensourceinitiative&logoColor=green" alt="License: Apache 2.0">
     </a>
   </p>
-  
-  <h5>
-    ✨ 如果您喜欢我们的项目，请给我们一个星 ⭐️ 以支持最新更新。
-  </h5>
 
-  <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/Demo-PC.gif" alt="EdgeRazor Demo" width="75%">
+  <h5>
+    ✨ If you like our project, please give us a star ⭐️ for the latest update.
+  </h5>
 </div>
 
 ---
 
-**EdgeRazor** 是一个针对端侧 AI 的轻量化框架，旨在训练出更小、更快，并可部署于多样化硬件平台的模型，覆盖从端侧设备到对时延敏感的云端场景。EdgeRazor 框架能够以**最小代码改动**将模型压缩技术**无缝集成**到现有全精度训练流程中，在保持优良任务性能的同时，实现低成本与高效率计算。
+**EdgeRazor** is a lightweight framework for edge AI, designed to train models that are smaller, faster, and deployable across diverse hardware, ranging from mobile and edge endpoints to latency-sensitive clouds. The EdgeRazor framework **seamlessly integrates** model compression techniques into existing full-precision training pipelines with **minimal code modification**, preserving promising task performance and enabling low-cost and high-efficiency computations.
 
-EdgeRazor 当前聚焦于通过可配置的量化感知蒸馏实现低比特 LLM 压缩。在**量化**方面，EdgeRazor 支持对权重（包括 embedding 与 lm_head 层）、激活值以及 KV cache 进行量化。量化位宽不仅包含统一的 1.58-bit 与 4-bit，还支持矩阵维度的混合精度配置，例如 2.79-bit（50% 4-bit + 50% 1.58-bit）和 1.88-bit（12.5% 4-bit + 87.5% 1.58-bit）。在**蒸馏**方面，EdgeRazor 提供 logits、特征与注意力蒸馏，并可在统一配置接口下灵活组合。
+EdgeRazor currently focuses on low-bit LLM compression via configurable quantization-aware distillation. In terms of **quantization**, EdgeRazor supports quantizing weights (including embedding and lm_head layers), activations, and KV cache. Quantized bit-widths include the uniform 1.58-bit and 4-bit, as well as matrix-wise mixed-precision, such as 2.79-bit (50% 4-bit + 50% 1.58-bit) and 1.88-bit (12.5% 4-bit + 87.5% 1.58-bit). In terms of **distillation**, EdgeRazor offers the logits, features, and attention distillation, all of which can be flexibly combined within a unified configuration interface.
 
-EdgeRazor 在多类模型上均取得了当前最先进表现，涵盖基础大模型、指令微调大模型与多模态大模型。以 W-A8-KV8 量化为例，**Qwen3-0.6B-EdgeRazor** 在 4-bit / 2.79-bit / 1.88-bit / 1.58-bit 下的平均分分别达到 **47.80** / **44.10** / **41.76** / **39.81**，对应压缩倍率分别为 **3.94×** / **5.05×** / **6.40×** / **7.03×**。相比之下，现有最佳方法在 4-bit / 3-bit / 2-bit 下仅达到 <u>45.74</u> / <u>37.38</u> / <u>30.49</u>，对应压缩倍率为 <u>2.21×</u> / <u>2.47×</u> / <u>2.78×</u>。
+EdgeRazor achieves the state-of-the-art performance across a range of models, including base LLMs, instruction-tuned LLMs, and multimodal LLMs. For W-A8-KV8 quantization, **Qwen3-0.6B-EdgeRazor** attains average scores of **47.80** / **44.10** / **41.76** / **39.81** at 4-bit / 2.79-bit / 1.88-bit / 1.58-bit, corresponding to compression ratios of **3.94×** / **5.05×** / **6.40×** / **7.03×**, respectively. In comparison, the best prior methods achieve <u>45.74</u> / <u>37.38</u> / <u>30.49</u> at 4-bit / 3-bit / 2-bit with compression ratios of <u>2.21×</u> / <u>2.47×</u> / <u>2.78×</u>.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/Architeacture.png" alt="EdgeRazor Architecture">
-  <br> EdgeRazor 框架用于轻量化模型训练的流程图
+  <br> Figure: The EdgeRazor framework with lightweight model training pipeline.
 </p>
 
-## 最新消息
+## News
 
-- 🔥 **[2026-04]**: 📄 论文-EdgeRazor 已在 arXiv 上发布：[2605.04062](https://arxiv.org/abs/2605.04062)！
-- 🔥 **[2026-04]**: 🏅 [CCF 算法能力大赛决赛](https://cacc.ccf.org.cn/#/tzgg/%E9%80%9A%E7%9F%A5%E5%85%AC%E5%91%8A/6ce6fd51cffa62eb3859a8bb80af1040)在 AI 赛道使用 EdgRazor作为题目的工具库！人机共舞，智创未来！
-- 🔥 **[2026-04]**: 🏆 由 EdgeRazor 框架训练的低比特大模型已在 Hugging Face 上发布！查看我们的 Hugging Face 模型集：[zhangsq-nju/edgerazor-nbit](https://huggingface.co/collections/zhangsq-nju/edgerazor-nbit)。
-- 🔥 **[2026-04]**: 🛠️ 开源 EdgeRazor-V1 发布！现在可在各种模型的训练流程上无缝集成和定制！
-- 🔥 **[2025-10]**: 📄 论文-TernaryCLIP 已在 arXiv 上发布：[https://arxiv.org/abs/2510.21879](https://arxiv.org/abs/2510.21879)！
+- 🔥 **[2026-04]**: 📄 Paper-EdgeRazor is available on arXiv: [2605.04062](https://arxiv.org/abs/2605.04062)!
+- 🔥 **[2026-04]**: 🚀 [EdgeRazor Playground](https://huggingface.co/spaces/zhangsq-nju/EdgeRazor-Playground) is launched and open-sourced! CPU-friendly! Have a try!
+- 🔥 **[2026-04]**: 🏅 [CACC 2025 Final](https://cacc.ccf.org.cn/#/tzgg/%E9%80%9A%E7%9F%A5%E5%85%AC%E5%91%8A/6ce6fd51cffa62eb3859a8bb80af1040) (China Algorithm Capability Competition) apply EdgeRazor as a solution in the AI subject!
+- 🔥 **[2026-04]**: 🏆 Low-bit LLMs by EdgeRazor is released! Check our Hugging Face collection: [zhangsq-nju/edgerazor-nbit](https://huggingface.co/collections/zhangsq-nju/edgerazor-nbit).
+- 🔥 **[2026-04]**: 🛠️ Open-sourced EdgeRazor-V1 is released! Now configurable on diverse models for seamless integration and customization!
+- 🔥 **[2025-10]**: 📄 Paper-TernaryCLIP is available on arXiv: [2510.21879](https://arxiv.org/abs/2510.21879)!
 
 ## Contents
 
-- [最新消息](#最新消息)
+- [News](#news)
 - [Contents](#contents)
-- [上手指南](#上手指南)
-  - [安装](#安装)
-  - [用法](#用法)
-  - [在 Docker 上部署低比特大模型](#在-docker-上部署低比特大模型)
-  - [在 Playground 上开始](#在-playground-上开始)
-- [主要技术](#主要技术)
-- [实际应用](#实际应用)
-- [模型列表](#模型列表)
-  - [语言大模型](#语言大模型)
-  - [多模态大模型](#多模态大模型)
-- [待办事项](#待办事项)
-- [引用](#引用)
-- [贡献者列表](#贡献者列表)
+- [Quick Start](#quick-start)
+  - [Installation](#installation)
+  - [Usage](#usage)
+  - [Docker](#docker)
+  - [Playground](#playground)
+- [Main Techniques](#main-techniques)
+- [Applications](#applications)
+- [Model Zoo](#model-zoo)
+  - [LLMs](#llms)
+  - [MLLMs](#mllms)
+- [Todo List](#todo-list)
+- [Citation](#citation)
+- [Contributor List](#contributor-list)
 
-## 上手指南
+## Quick Start
 
-### 安装
+### Installation
 
-- 从 PyPi 下载
+- Download from PyPi
 
 ```bash
 pip install edgerazor
 ```
 
-- 从 GitHub 下载（最新版本）
+- Download from GitHub (latest version)
 
 ```bash
 git clone https://github.com/zhangsq-nju/EdgeRazor.git && cd EdgeRazor
@@ -88,39 +87,39 @@ conda activate edgerazor
 pip install -e .
 ```
 
-### 用法
+### Usage
 
-安装完成后，您可以将 EdgeRazor 集成到现有训练流程中，构建轻量化模型。
+After installation, you can integrate EdgeRazor into your existing training pipeline to build lightweight models.
 
-1. 使用统一配置接口，可通过 [yaml](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.yaml)、[json](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.json) 或 [dict](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.py) 进行配置。
+1. Use unified configuration by [yaml](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.yaml), [json](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.json) or [dict](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.py).
 
-2. 将 EdgeRazor 无缝接入您的全精度模型训练流程，即刻开启轻量化之旅！
+2. Seamlessly integrate EdgeRazor into your FULL-PRECISION model training and enjoy your lightweight journey!
 
 ```python
-# 初始化 EdgeRazor 以构建轻量化模型
+# Init EdgeRazor for lightweight model
 edgerazor = EdgeRazor(config="/path/to/config.yaml")
 student = edgerazor.quantize(student)
-# 训练循环
+# Training loop
 student_outputs = student(inputs)
 teacher_outputs = teacher(inputs)
-# 计算损失
+# Calculate loss
 loss, loss_dict = edgerazor.compute_loss(student_outputs, teacher_outputs, labels)
 ```
 
-### 在 Docker 上部署低比特大模型
+### Docker
 
-您可以基于 EdgeRazor 训练得到的权重转化为轻量化模型。例如，可将 Qwen3-EdgeRazor-4bit 权重转换为 Q4_0 GGUF 格式。我们也在 [collection](https://huggingface.co/collections/zhangsq-nju/edgerazor-nbit) 中提供了开箱即用的量化模型，包括 [Qwen3-0.6B-EdgeRazor-GGUF](https://huggingface.co/zhangsq-nju/Qwen3-0.6B-EdgeRazor-GGUF) 和 [Qwen3-1.7B-EdgeRazor-GGUF](https://huggingface.co/zhangsq-nju/Qwen3-1.7B-EdgeRazor-GGUF)。
+Lightweight models are available from checkpoints trained with EdgeRazor. For example, you can convert Qwen3-EdgeRazor-4bit checkpoints to Q4_0 GGUF models. We also provide ready-to-use quantized models in our [collection](https://huggingface.co/collections/zhangsq-nju/edgerazor-nbit), including [Qwen3-0.6B-EdgeRazor-GGUF](https://huggingface.co/zhangsq-nju/Qwen3-0.6B-EdgeRazor-GGUF) and [Qwen3-1.7B-EdgeRazor-GGUF](https://huggingface.co/zhangsq-nju/Qwen3-1.7B-EdgeRazor-GGUF).
 
 ```bash
-# 仅使用 CPU 来进行量化大模型的部署：
+# Serve quantized LLMs under CPU-only environments:
 docker pull ghcr.io/ggml-org/llama.cpp:server
 hf download zhangsq-nju/Qwen3-1.7B-EdgeRazor-GGUF Qwen3-1.7B-EdgeRazor-TQ2_0.gguf --local-dir /path/to/Qwen3-1.7B-EdgeRazor-GGUF
 cd ./docker && bash local_server_tq2_0.sh
 ```
 
-### 在 Playground 上开始
+### Playground
 
-上线 CPU 友好的 EdgeRazor Playground！在端侧设备上尽情享受低比特大模型的魅力！
+EdgeRazor Playgound is CPU-friendly! Enjoy low-bit LLMs from EdgeRazor on your edge devices!
 
 ```bash
 cd EdgeRazor/playground
@@ -130,40 +129,38 @@ python app.py
 
 ![EdgeRazor Playground Sreenshot](https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/Playground.png)
 
-## 主要技术
+## Main Techniques
 
-量化感知蒸馏 (Quantization-Aware Distillation, QAD)：
+Quantization-Aware Distillation (QAD): 
 
-- 针对模型权重：可配置的矩阵维度的混合精度量化训练
-- 蒸馏训练过程：可配置的从 16-bit 到 $n$-bit 模型的蒸馏
-- 蒸馏训练方法：
-  - 自适应的特征蒸馏 (Adaptive Feature Distillation, AFD)
-  - 熵感知的 KL 散度 (Entropy-Aware KL Divergence, EAKLD)
+- Configurable mixed-precision quantization for weights
+- Configurable knowledge distillation pipelines between 16-bit and $n$-bit models
+- Knowledge distillation methods: Adaptive Feature Distillation (AFD), Entropy-Aware KL Divergence (EAKLD)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/EdgeRazor-Framework.png" alt="EdgeRazor Framework Overview" width="75%">
-  <br> 图：EdgeRazor 框架的工作流程图
+  <br> Figure: Workflow of the EdgeRazor framework.
 </p>
 
-## 实际应用
+## Applications
 
-- 轻量化 ViT-S/16 for MNIST，[点击这里查看](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/vit/README.md)。
-- 轻量化 ViT-S/16 for RetinaMNIST，[点击这里查看](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/medical_vit/README.md)。
-- 轻量化 ResNet-18，[点击这里查看](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/resnet/README.md)。
-- 轻量化 Qwen3-0.6B/1.7B，[点击这里查看](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/edgerazor-llm/README.md)。
-- 轻量化 MobileLLM-ParetoQ-350M-BF16，[点击这里查看](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/edgerazor-llm/README.md)。
-- 轻量化 Qwen2.5-Omni-7B，[点击这里查看](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/qwen2.5-omni/README.md)。
+- Lightweight ViT-S/16 for MNIST, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/vit/README.md).
+- Lightweight ViT-S/16 for RetinaMNIST, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/medical_vit/README.md).
+- Lightweight ResNet-18, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/resnet/README.md).
+- Lightweight Qwen3-0.6B/1.7B, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/edgerazor-llm/README.md).
+- Lightweight MobileLLM-ParetoQ-350M-BF16, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/edgerazor-llm/README.md).
+- Lightweight Qwen2.5-Omni-7B, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/qwen2.5-omni/README.md).
 
-## 模型列表
+## Model Zoo
 
-### 语言大模型
+### LLMs
 
-- 平均性能（Avg.）：使用 [lm-eval v0.4.9.1](https://github.com/EleutherAI/lm-evaluation-harness/tree/v0.4.9.1) 及对应 [tasks](https://github.com/zhangsq-nju/EdgeRazor/tree/main/src/eval/tasks/lm_eval/) 在多项任务上评测得到的平均分。
-  - 指令大模型的评测列表：arc_easy, arc_challenge, hellaswag, boolq, social_iqa, openbookqa, piqa, winogrande, hendrycks_ethics, truthfulqa_mc2, mmlu, gsm8k, humaneval_instruct, ifeval。
-  - 基础大模型的评测列表：arc_easy, arc_challenge, hellaswag, boolq, social_iqa, openbookqa, piqa, winogrande, hendrycks_ethics, truthfulqa_mc2, mmlu, gsm8k, humaneval。
-  - 除了 gsm8k 是 5-shot 之外，其余的任务都采用 0-shot。
+- Average Performance (Avg.): average of performance scores in multiple tasks using [lm-eval v0.4.9.1](https://github.com/EleutherAI/lm-evaluation-harness/tree/v0.4.9.1) with [tasks](https://github.com/zhangsq-nju/EdgeRazor/tree/main/src/eval/tasks/lm_eval/).
+  - Tasks for instruct LLMs: arc_easy, arc_challenge, hellaswag, boolq, social_iqa, openbookqa, piqa, winogrande, hendrycks_ethics, truthfulqa_mc2, mmlu, gsm8k, humaneval_instruct, ifeval.
+  - Tasks for base LLMs: arc_easy, arc_challenge, hellaswag, boolq, social_iqa, openbookqa, piqa, winogrande, hendrycks_ethics, truthfulqa_mc2, mmlu, gsm8k, humaneval.
+  - Except for 5-shot gsm8k, all other tasks are 0-shot.
 
-- Hub Link：我们提供原始量化后的权重；在兼容的情况下，也会将其转换为 GGUF（[llama.cpp](https://github.com/ggml-org/llama.cpp)）与 GPTQ（[GPTQModel](https://github.com/ModelCloud/GPTQModel)，推进中）格式。
+- Hub Link: We provide the original quantized checkpoints. We also transfer the checkpoints into GGUF ([llama.cpp](https://github.com/ggml-org/llama.cpp)) and GPTQ ([GPTQModel](https://github.com/ModelCloud/GPTQModel), working in progress) formats if compatible.
 
 | Model          | W-A-KV       | Group Size | Avg.  | Hub Link                                                                                                                                                                                                                                                                                                             |
 | -------------- | ------------ | ---------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -183,30 +180,30 @@ python app.py
 | MobileLLM-350M | W1.88-A8-KV8 | 64         | 39.32 | [EdgeRazor](https://huggingface.co/zhangsq-nju/MobileLLM-350M-EdgeRazor-1.88bit)                                                                                                                                                                                                                                     |
 | MobileLLM-350M | W1.58-A8-KV8 | 64         | 38.12 | [EdgeRazor](https://huggingface.co/zhangsq-nju/MobileLLM-350M-EdgeRazor-1.58bit)                                                                                                                                                                                                                                     |
 
-### 多模态大模型
+### MLLMs
 
-- Video-MME 与 MLVU 为视频理解任务，使用 [lmms-eval v0.5.0](https://github.com/EvolvingLMMs-Lab/lmms-eval/tree/v0.5) 及对应 [tasks](https://github.com/zhangsq-nju/EdgeRazor/tree/main/src/eval/tasks/lmms-eval/) 进行评测。
+- Video-MME and MLVU are video understanding tasks using [lmms-eval v0.5.0](https://github.com/EvolvingLMMs-Lab/lmms-eval/tree/v0.5) with [tasks](https://github.com/zhangsq-nju/EdgeRazor/tree/main/src/eval/tasks/lmms-eval/).
 
 | Model           | W-A-KV       | Group Size | Video-MME | MLVU  | Hub Link                                                                       |
 | --------------- | ------------ | ---------- | --------- | ----- | ------------------------------------------------------------------------------ |
 | Qwen2.5-Omni-7B | W16-A16-KV16 | -          | 62.81     | 48.01 | [Base](https://huggingface.co/Qwen/Qwen2.5-Omni-7B)                            |
 | Qwen2.5-Omni-7B | W4-A16-KV16  | 32         | 62.22     | 48.82 | [EdgeRazor](https://huggingface.co/zhangsq-nju/Qwen2.5-Omni-7B-EdgeRazor-4bit) |
 
-## 待办事项
+## Todo List
 
-EdgeRazor 正在持续不断发展！以下是即将推出的内容：
+EdgeRazor is continuously evolving! Here's what's coming:
 
-- [x] 一系列轻量化大模型的训练代码
-- [ ] 升级针对最新依赖库的支持
+- [x] Lightweight MobileLLM, Qwen3, and Qwen2.5-Omni: training code
+- [ ] Upgrade to support the newest dependencies
 
-有任何想法或建议吗？我们欢迎任何贡献和合作！请随时提交 issues 或 pull requests！🚀
+Have ideas or suggestions? We welcome and appreciate any contributions and collaborations! Please feel free to submit issues or pull requests! 🚀
 
-## 引用
+## Citation
 
-如果您觉得我们的论文和工具对您的研究有帮助，请考虑引用我们的论文 ✏️：
+If you find our papar and code useful in your research, please consider kindly citing our papers ✏️:
 
 ```
-@article{zhangsh-ternaryclip,
+@article{zhangsh-edgerazor,
   title={{EdgeRazor}: A Lightweight Framework for Large Language Models via Mixed-Precision Quantization-Aware Distillation},
   author={Shu-Hao Zhang and Le-Tong Huang and Xiang-Sheng Deng and Xin-Yi Zou and Chen Wu and Nan Li and Shao-Qun Zhang},
   year={2026},
@@ -221,6 +218,6 @@ EdgeRazor 正在持续不断发展！以下是即将推出的内容：
 }
 ```
 
-## 贡献者列表
+## Contributor List
 
-这个项目由[机器学习与数据挖掘研究所（LAMDA）](https://www.lamda.nju.edu.cn)和[张绍群教授](https://www.lamda.nju.edu.cn/zhangsq)支持。[张书豪](https://github.com/zhsh9)是本项目的核心开发者和维护者，[邓翔升](https://github.com/deng-xiangsheng)和[黄乐彤](https://github.com/LT1923)是本项目的参与者和开发者。
+This project was supported by [LAMDA](https://www.lamda.nju.edu.cn) and Assistant Professor [Shao-Qun Zhang](https://www.lamda.nju.edu.cn/zhangsq). [Shu-Hao Zhang](https://github.com/zhsh9) is the core developer and maintainer of EdgeRazor-V1. [Xiang-Sheng Deng](https://github.com/deng-xiangsheng) and [Le-Tong Huang](https://github.com/LT1923) jointly participated in the development of this project.

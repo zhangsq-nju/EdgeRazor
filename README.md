@@ -93,7 +93,7 @@ pip install -e .
 
 After installation, you can integrate EdgeRazor into your existing training pipeline to build lightweight models.
 
-1. Use unified configuration by [yaml](./example/configs/qad/qat_w4_a8_kd_fd.yaml), [json](./example/configs/qad/qat_w4_a8_kd_fd.json) or [dict](./example/configs/qad/qat_w4_a8_kd_fd.py).
+1. Use unified configuration by [yaml](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.yaml), [json](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.json) or [dict](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.py).
 
 2. Seamlessly integrate EdgeRazor into your FULL-PRECISION model training and enjoy your lightweight journey!
 
@@ -146,18 +146,18 @@ Quantization-Aware Distillation (QAD):
 
 ## Applications
 
-- Lightweight ViT-S/16 for MNIST, check [here](./example/vit/README.md).
-- Lightweight ViT-S/16 for RetinaMNIST, check [here](./example/medical_vit/README.md).
-- Lightweight ResNet-18, check [here](./example/resnet/README.md).
-- Lightweight Qwen3-0.6B/1.7B, check [here](./example/edgerazor-llm/README.md).
-- Lightweight MobileLLM-ParetoQ-350M-BF16, check [here](./example/edgerazor-llm/README.md).
-- Lightweight Qwen2.5-Omni-7B, check [here](./example/qwen2.5-omni/README.md).
+- Lightweight ViT-S/16 for MNIST, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/vit/README.md).
+- Lightweight ViT-S/16 for RetinaMNIST, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/medical_vit/README.md).
+- Lightweight ResNet-18, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/resnet/README.md).
+- Lightweight Qwen3-0.6B/1.7B, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/edgerazor-llm/README.md).
+- Lightweight MobileLLM-ParetoQ-350M-BF16, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/edgerazor-llm/README.md).
+- Lightweight Qwen2.5-Omni-7B, check [here](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/qwen2.5-omni/README.md).
 
 ## Model Zoo
 
 ### LLMs
 
-- Average Performance (Avg.): average of performance scores in multiple tasks using [lm-eval v0.4.9.1](https://github.com/EleutherAI/lm-evaluation-harness/tree/v0.4.9.1) with [tasks](./src/eval/tasks/lm_eval/).
+- Average Performance (Avg.): average of performance scores in multiple tasks using [lm-eval v0.4.9.1](https://github.com/EleutherAI/lm-evaluation-harness/tree/v0.4.9.1) with [tasks](https://github.com/zhangsq-nju/EdgeRazor/tree/main/src/eval/tasks/lm_eval/).
   - Tasks for instruct LLMs: arc_easy, arc_challenge, hellaswag, boolq, social_iqa, openbookqa, piqa, winogrande, hendrycks_ethics, truthfulqa_mc2, mmlu, gsm8k, humaneval_instruct, ifeval.
   - Tasks for base LLMs: arc_easy, arc_challenge, hellaswag, boolq, social_iqa, openbookqa, piqa, winogrande, hendrycks_ethics, truthfulqa_mc2, mmlu, gsm8k, humaneval.
   - Except for 5-shot gsm8k, all other tasks are 0-shot.
@@ -184,7 +184,7 @@ Quantization-Aware Distillation (QAD):
 
 ### MLLMs
 
-- Video-MME and MLVU are video understanding tasks using [lmms-eval v0.5.0](https://github.com/EvolvingLMMs-Lab/lmms-eval/tree/v0.5) with [tasks](./src/eval/tasks/lmms-eval/).
+- Video-MME and MLVU are video understanding tasks using [lmms-eval v0.5.0](https://github.com/EvolvingLMMs-Lab/lmms-eval/tree/v0.5) with [tasks](https://github.com/zhangsq-nju/EdgeRazor/tree/main/src/eval/tasks/lmms-eval/).
 
 | Model           | W-A-KV       | Group Size | Video-MME | MLVU  | Hub Link                                                                       |
 | --------------- | ------------ | ---------- | --------- | ----- | ------------------------------------------------------------------------------ |
