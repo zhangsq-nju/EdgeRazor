@@ -147,7 +147,8 @@ python app.py
 
 ## 实际应用
 
-- 轻量化 ViT-S/16，[点击这里查看]((./example/vit/README.md))。
+- 轻量化 ViT-S/16 for MNIST，[点击这里查看]((./example/vit/README.md))。
+- 轻量化 ViT-S/16 for RetinaMNIST，[点击这里查看](./example/medical_vit/README.md)。
 - 轻量化 ResNet-18，[点击这里查看](./example/resnet/README.md)。
 - 轻量化 Qwen3-0.6B/1.7B，[点击这里查看](./example/edgerazor-llm/README.md)。
 - 轻量化 MobileLLM-ParetoQ-350M-BF16，[点击这里查看](./example/edgerazor-llm/README.md)。

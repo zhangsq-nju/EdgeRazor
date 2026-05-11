@@ -13,12 +13,8 @@ Table of Contents
 - [Quantize .pth to .gguf](#quantize-pth-to-gguf)
 - [Inference / Demo with .gguf](#inference--demo-with-gguf)
 - [Evaluation](#evaluation)
-- [Upload](#upload)
-- [Notes](#notes)
 
 ## Installation
-
-(The environment is already prepared. Participants do not need to install it again. All preinstalled dependencies are under `/opt/code-dependency/*`.)
 
 ### Install EdgeRazor
 
@@ -75,7 +71,7 @@ Default data and output paths in scripts can be modified in `src/train/train.sh`
 ### Train baseline (W16-A16)
 
 ```
-cd code/src/train
+cd src/train
 bash train.sh
 ```
 
@@ -92,7 +88,7 @@ After training, files are saved under `model/checkpoints/<run_name>/` in the pro
 You can directly run the quantized training section in `train.sh`, or execute manually:
 
 ```
-cd code/src/train
+cd src/train
 python -m train \
   --batch_size 128 \
   --epochs 50 \
@@ -112,7 +108,7 @@ python -m train \
 You can modify the config in `train.sh` and run quantized training, or execute manually:
 
 ```
-cd code/src/train
+cd src/train
 python -m train \
   --batch_size 128 \
   --epochs 50 \
@@ -125,14 +121,14 @@ python -m train \
   --data_root /path/to/data_root
 ```
 
-Weight quantization config for QAT is in `code/src/train/q_vit_w4_a16.yaml`.
+Weight quantization config for QAT is in `src/train/q_vit_w4_a16.yaml`.
 
 ## Quantize .pth to .gguf
 
 The weight conversion scripts are in `src/quantize/`:
 
 ```
-cd code/src/quantize
+cd src/quantize
 bash convert-pth-to-gguf.sh
 ```
 
@@ -142,7 +138,7 @@ To convert another model, modify `CKPT_PATH` and `OUTPUT_PATH` in the script.
 For further quantization (gguf -> int4), run:
 
 ```
-cd code/src/quantize
+cd src/quantize
 bash quantize.sh
 ```
 
@@ -150,10 +146,10 @@ This outputs `q_vit_w4_a16-quant.gguf`.
 
 ## Inference / Demo with .gguf
 
-Run inference using `code/vit.cpp` (compile first):
+Run inference using `vit.cpp` (compile first):
 
 ```
-cd code/vit.cpp/build/bin
+cd vit.cpp/build/bin
 ./vit \
   -t 4 \
   -m GGUF_PATH \
@@ -175,24 +171,15 @@ cd /opt/code-dependency/vit.cpp/build/bin
 Evaluation scripts are in `src/eval/`. They report metrics such as accuracy and F1, and call vit.cpp to measure model size and inference time.
 
 ```
-cd code/src/eval
+cd src/eval
 bash eval.sh
 ```
 
 Or specify arguments manually:
 
 ```
-cd code/src/eval
+cd src/eval
 python eval.py \
   --pth_path PTH_MODEL_PATH \
   --gguf_path GGUF_MODEL_PATH
 ```
-
-## Upload
-
-You need to submit both `*.pth` model weights and converted `*.gguf` weights.
-
-## Notes
-
-- Lightweight toolkit path used by this sample: `/opt/code-dependency/EdgeRazor/`
-- Dependency tools are in `code/vit.cpp/` (compile it yourself) and `/opt/code-dependency/vit.cpp` (precompiled). Evaluation and gguf inference both use binaries built from this framework.

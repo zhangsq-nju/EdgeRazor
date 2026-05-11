@@ -146,7 +146,8 @@ Quantization-Aware Distillation (QAD):
 
 ## Applications
 
-- Lightweight ViT-S/16, check [here](./example/vit/README.md).
+- Lightweight ViT-S/16 for MNIST, check [here](./example/vit/README.md).
+- Lightweight ViT-S/16 for RetinaMNIST, check [here](./example/medical_vit/README.md).
 - Lightweight ResNet-18, check [here](./example/resnet/README.md).
 - Lightweight Qwen3-0.6B/1.7B, check [here](./example/edgerazor-llm/README.md).
 - Lightweight MobileLLM-ParetoQ-350M-BF16, check [here](./example/edgerazor-llm/README.md).
