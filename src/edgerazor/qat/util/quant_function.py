@@ -176,19 +176,20 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_dynamic(
         block_variance = w_flat.var(dim=-1)
 
         # Determine how many blocks should use INT4 (higher precision)
-        num_int4_blocks = min(max(1, int(num_blocks * mixed_precision_prop)), num_blocks)
-
-        # Select top-k blocks with highest variance for INT4 quantization
-        _, top_indices = torch.topk(block_variance, k=num_int4_blocks, dim=-1)
+        num_int4_blocks = int(num_blocks * mixed_precision_prop)
 
         # Create mask for INT4 blocks
         int4_mask = torch.zeros_like(block_variance, dtype=torch.bool)
-        int4_mask.scatter_(dim=-1, index=top_indices, value=True)
+        if num_int4_blocks > 0:
+            # Select top-k blocks with highest variance for INT4 quantization
+            _, top_indices = torch.topk(block_variance, k=num_int4_blocks, dim=-1)
+            int4_mask.scatter_(dim=-1, index=top_indices, value=True)
+        # else: mask stays all False → all blocks quantized to INT1_58
 
     return int4_mask
 
 
-@per_block_reshape
+@mixed_precision_quantize
 def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static(
     w: Tensor,
     epsilon: float = 1e-5,
@@ -200,7 +201,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static(
     Quantize weight to INT1_58 and INT4 per-block using static mixed precision.
 
     Static Strategy (Position-based Block Selection):
-    - Divides weight into blocks in sequential order
+    - Divides weight into blocks in sequential (row-major) order
     - Statically assigns the first mixed_precision_prop (e.g., 1%) blocks to INT4
     - First blocks (by position) are quantized to INT4 using absmax method
     - Remaining blocks are quantized to INT1_58 using clip method
@@ -208,6 +209,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static(
     Example:
     - With mixed_precision_prop=0.01, the first 1% blocks use INT4: [-7, 7]
     - The remaining 99% blocks use INT1_58: {-1, 0, 1}
+    - With mixed_precision_prop=0.0, all blocks use INT1_58
 
     This approach uses a fixed pattern without analyzing weight importance,
     assuming that earlier blocks in the tensor are more critical.
@@ -220,34 +222,21 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static(
         mixed_precision_prop: Proportion of blocks to quantize to higher precision (INT4)
 
     Returns:
-        Quantized weight tensor with static mixed precision quantization
+        1D boolean mask (num_blocks,) — True for INT4 blocks, False for INT1_58
     """
-    bits_int4 = 4
-    max_val_int4 = 2**(bits_int4 - 1) - 1  # 7 for INT4
-
     with torch.no_grad():
-        # Flatten pre-shaped tensor to (num_blocks, block_size)
+        # w is pre-reshaped by decorator to [..., -1, block_size]; flatten to 2D
         num_blocks = w.numel() // block_size
-        w_flat = w.view(num_blocks, block_size)
 
-        # Determine how many blocks should use INT4 (higher precision)
-        # Directly use the first num_int4_blocks as important blocks
-        num_int4_blocks = min(max(1, int(num_blocks * mixed_precision_prop)), num_blocks)
+        # First num_int4_blocks (row-major order) get INT4 precision
+        num_int4_blocks = int(num_blocks * mixed_precision_prop)
 
-        # ===== INT4 Quantization (absmax method) for first num_int4_blocks =====
-        w_int4_blocks = w_flat[:num_int4_blocks, :]
-        w_scale_int4 = w_int4_blocks.abs().max(dim=-1, keepdim=True).values.clamp_(min=epsilon) / max_val_int4
-        w_quant_int4 = (w_int4_blocks / w_scale_int4).round().clamp(-max_val_int4, max_val_int4) * w_scale_int4
+        int4_mask = torch.zeros(num_blocks, dtype=torch.bool, device=w.device)
+        if num_int4_blocks > 0:
+            int4_mask[:num_int4_blocks] = True
+        # else: mask stays all False → all blocks quantized to INT1_58
 
-        # ===== INT1_58 Quantization (clip method) for remaining blocks =====
-        w_int1_58_blocks = w_flat[num_int4_blocks:, :]
-        w_scale_int1_58 = w_int1_58_blocks.abs().mean(dim=-1, keepdim=True).mul(w_scale_factor).clamp_(min=epsilon)
-        w_quant_int1_58 = (w_int1_58_blocks / w_scale_int1_58).round().clamp(-1, 1) * w_scale_int1_58
-
-        # ===== Combine INT4 and INT1_58 blocks =====
-        w_quant_flat = torch.cat([w_quant_int4, w_quant_int1_58], dim=0)
-
-    return w_quant_flat
+    return int4_mask
 
 
 @mixed_precision_quantize
@@ -279,6 +268,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_column_
     - Column 0 (blocks at position 0 for all 1024 rows) uses INT4
     - Columns 1-7 use INT1.58
     - Total INT4 blocks: 1024 × 1 = 1024, INT1.58 blocks: 1024 × 7 = 7168
+    - With mixed_precision_prop=0.0, all columns use INT1_58
 
     Args:
         w: Weight tensor to quantize, shape (out_dim, in_dim)
@@ -296,10 +286,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_column_
         blocks_per_channel = w.shape[1]
 
         # Determine how many blocks per channel should use INT4
-        num_int4_blocks_per_channel = min(
-            max(1, int(blocks_per_channel * mixed_precision_prop)),
-            blocks_per_channel
-        )
+        num_int4_blocks_per_channel = int(blocks_per_channel * mixed_precision_prop)
 
         # Create per-column mask, then broadcast to all rows
         block_indices = torch.arange(blocks_per_channel, device=w.device)
@@ -339,6 +326,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_row_wis
     - Other rows use INT1.58 for all 8 blocks (1014 rows)
     - Total INT4 blocks: 10 × 8 = 80, INT1.58 blocks: 1014 × 8 = 8112
     - Actual INT4 proportion: 80 / 8192 ≈ 0.98%
+    - With mixed_precision_prop=0.0, all blocks use INT1_58
 
     Args:
         w: Weight tensor to quantize, shape (out_dim, in_dim)
@@ -355,10 +343,12 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_row_wis
         out_dim = w.shape[0]
         blocks_per_channel = w.shape[1]
 
-        # Calculate row spacing: every n-th row gets INT4
-        row_spacing = max(1, int(1.0 / mixed_precision_prop)) if mixed_precision_prop > 0 else out_dim + 1
+        if mixed_precision_prop <= 0:
+            # No rows get INT4 — all blocks are INT1_58
+            return torch.zeros(out_dim * blocks_per_channel, dtype=torch.bool, device=w.device)
 
-        # Create per-row mask, then broadcast to all blocks in each row
+        # Every n-th row gets INT4 for all its blocks, where n = 1/prop
+        row_spacing = max(1, int(1.0 / mixed_precision_prop))
         row_indices = torch.arange(out_dim, device=w.device)
         row_mask = row_indices % row_spacing == 0  # (out_dim,)
         int4_mask = row_mask.unsqueeze(1).expand(out_dim, blocks_per_channel).reshape(-1)
@@ -388,6 +378,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_sparse(
       while blocks 2-100 are INT1_58.
     - Block indices 0, 100, 200, ... get INT4.
     - Block indices 1-99, 101-199, ... get INT1_58.
+    - With `mixed_precision_prop=0.0`, all blocks use INT1_58.
 
     This differs from the standard static method by distributing INT4 blocks
     evenly throughout the tensor rather than concentrating them at the start.
@@ -407,7 +398,7 @@ def weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_sparse(
 
         # --- Create the sparse mask for INT4 blocks ---
         group_size = 100
-        num_int4_per_group = min(max(1, int(group_size * mixed_precision_prop)), group_size)
+        num_int4_per_group = int(group_size * mixed_precision_prop)
 
         # Create indices from 0 to num_blocks - 1
         indices = torch.arange(num_blocks, device=w.device)
@@ -691,47 +682,44 @@ def weight_quant_uniform_asymmetric_max_per_tensor_int4(
 ) -> Tensor:
     """
     Quantize weight to INT4 per-tensor using asymmetric max method.
-    
-    Quantizes weight to INT4: [-8, 7] * w_scale.
-    Scale factor is computed using signed max value (not absmax).
-    It is compatible with the GGML Q4_0 quantization scheme.
-    
+
+    Quantizes weight to INT4: {-8, -7, ..., 6, 7} * w_scale.
+    Scale = max(w) / 7, ensuring the max value is exactly representable
+    at reference level q=7.
+
+    Representable range: [-8/7 * max(w), max(w)] — covers symmetric
+    distributions fully since 8/7 > 1.
+
+    For all-negative weights (max(w) < 0), falls back to absmax / 7.
+
     Args:
         w: Weight tensor to quantize
         epsilon: Small value to prevent division by zero
 
     Returns:
-        Quantized weight tensor with values in [-8, 7] * w_scale
+        Quantized weight tensor with values in {-8, ..., 7} * w_scale
     """
     bits = 4
-    # For INT4: range is [-2^(bits-1), 2^(bits-1) - 1] = [-8, 7]
-    min_val = -(2 ** (bits - 1))     # -8 for INT4
-    # max_val = 2 ** (bits - 1) - 1  # 7 for INT4
-    zero_point = -min_val            # 8 for INT4
-    
+    ref_max = 2 ** (bits - 1) - 1   # 7, maps to w_max
+    zero_point = 2 ** (bits - 1)     # 8, maps to 0
+
     with torch.no_grad():
-        # Find the maximum value (with sign) for the entire tensor
         w_max = w.max()
-        
-        # Compute scale factor: d = max / min_val
-        # For INT4: d = max / -8
-        w_scale = w_max / min_val
-        
-        # Handle zero scale (add epsilon to prevent division by zero)
-        w_scale = torch.where(
-            w_scale.abs() < epsilon,
-            torch.tensor(epsilon, device=w_scale.device, dtype=w_scale.dtype),
-            w_scale
-        )
-        
-        # Quantization formula: q = clamp(round(w / scale + zero_point), 0, 2^bits - 1)
-        # This maps [min_val, max_val] range to [0, 2^bits - 1] storage range
-        w_div_scale = w / w_scale
-        w_quant_storage = (w_div_scale + zero_point).round().clamp(0, 2**bits - 1)
-        
-        # Dequantization: w = (q - zero_point) * scale
-        # This converts back from [0, 15] storage to [min_val, max_val] * scale
-        w_quant = (w_quant_storage - zero_point) * w_scale
+        # Positive scale: w_max lands at q=7 (storage 15), giving
+        # representable range [-8/7*w_max, w_max].
+        w_scale = w_max / ref_max
+
+        # All-negative weights: w_max < 0 → w_scale < 0 would invert
+        # the grid. Fall back to absmax to keep range well-formed.
+        if w_scale < 0:
+            w_scale = w.abs().max() / ref_max
+
+        w_scale = w_scale.clamp_(min=epsilon)
+
+        # q = round(w / scale + zp)  →  storage ∈ [0, 15]
+        # ŵ = (q - zp) * scale       →  reference ∈ {-8, ..., 7} * scale
+        q_storage = (w / w_scale + zero_point).round().clamp(0, 2**bits - 1)
+        w_quant = (q_storage - zero_point) * w_scale
 
     return w_quant
 
@@ -742,48 +730,41 @@ def weight_quant_uniform_asymmetric_max_per_channel_int4(
 ) -> Tensor:
     """
     Quantize weight to INT4 per-channel using asymmetric max method.
-    
-    Quantizes weight to INT4: [-8, 7] * w_scale.
-    Scale factor is computed per output channel using signed max value (not absmax).
-    It is compatible with the GGML Q4_0 quantization scheme.
-    
+
+    Quantizes weight to INT4: {-8, -7, ..., 6, 7} * w_scale.
+    Scale = max(w, dim=-1) / 7 per output channel.
+
+    Representable range: [-8/7 * max(w), max(w)] — covers symmetric
+    distributions fully since 8/7 > 1.
+
+    For channels where max(w) < 0, falls back to absmax / 7.
+
     Args:
         w: Weight tensor to quantize, shape (out_dim, in_dim)
         epsilon: Small value to prevent division by zero
 
     Returns:
-        Quantized weight tensor with values in [-8, 7] * w_scale
+        Quantized weight tensor with values in {-8, ..., 7} * w_scale
     """
     bits = 4
-    # For INT4: range is [-2^(bits-1), 2^(bits-1) - 1] = [-8, 7]
-    min_val = -(2 ** (bits - 1))     # -8 for INT4
-    # max_val = 2 ** (bits - 1) - 1  # 7 for INT4
-    zero_point = -min_val            # 8 for INT4
-    
+    ref_max = 2 ** (bits - 1) - 1   # 7
+    zero_point = 2 ** (bits - 1)     # 8
+
     with torch.no_grad():
-        # Find the maximum value (with sign) for each output channel
         # Shape: (out_dim, 1)
         w_max = w.max(dim=-1, keepdim=True).values
-        
-        # Compute scale factor: d = max / min_val
-        # For INT4: d = max / -8
-        w_scale = w_max / min_val
-        
-        # Handle zero scale (add epsilon to prevent division by zero)
-        w_scale = torch.where(
-            w_scale.abs() < epsilon,
-            torch.tensor(epsilon, device=w_scale.device, dtype=w_scale.dtype),
-            w_scale
-        )
-        
-        # Quantization formula: q = clamp(round(w / scale + zero_point), 0, 2^bits - 1)
-        # This maps [min_val, max_val] range to [0, 2^bits - 1] storage range
-        w_div_scale = w / w_scale
-        w_quant_storage = (w_div_scale + zero_point).round().clamp(0, 2**bits - 1)
-        
-        # Dequantization: w = (q - zero_point) * scale
-        # This converts back from [0, 15] storage to [min_val, max_val] * scale
-        w_quant = (w_quant_storage - zero_point) * w_scale
+        w_scale = w_max / ref_max
+
+        # Fallback for channels with negative max
+        neg_mask = w_scale < 0
+        if neg_mask.any():
+            fallback = w[neg_mask.expand_as(w)].view(neg_mask.sum(), -1).abs().max(dim=-1, keepdim=True).values / ref_max
+            w_scale = torch.where(neg_mask, fallback, w_scale)
+
+        w_scale = w_scale.clamp_(min=epsilon)
+
+        q_storage = (w / w_scale + zero_point).round().clamp(0, 2**bits - 1)
+        w_quant = (q_storage - zero_point) * w_scale
 
     return w_quant
 
@@ -797,9 +778,13 @@ def weight_quant_uniform_asymmetric_max_per_block_int4(
     """
     Quantize weight to INT4 per-block using asymmetric max method.
 
-    Quantizes weight to INT4: [-8, 7] * w_scale.
-    Scale factor is computed per block using signed max value (not absmax).
-    It is compatible with the GGML Q4_0 quantization scheme.
+    Quantizes weight to INT4: {-8, -7, ..., 6, 7} * w_scale.
+    Scale = max(w, dim=-1) / 7 per block.
+
+    Representable range: [-8/7 * max(w), max(w)] — covers symmetric
+    distributions fully since 8/7 > 1.
+
+    For blocks where max(w) < 0, falls back to absmax / 7.
 
     Args:
         w: Weight tensor to quantize, shape (out_dim, in_dim)
@@ -807,38 +792,27 @@ def weight_quant_uniform_asymmetric_max_per_block_int4(
         block_size: Size of each quantization block (default 32 for Q4_0)
 
     Returns:
-        Quantized weight tensor with values in [-8, 7] * w_scale
+        Quantized weight tensor with values in {-8, ..., 7} * w_scale
     """
     bits = 4
-    # For INT4: range is [-2^(bits-1), 2^(bits-1) - 1] = [-8, 7]
-    min_val = -(2 ** (bits - 1))     # -8 for INT4
-    # max_val = 2 ** (bits - 1) - 1  # 7 for INT4
-    zero_point = -min_val            # 8 for INT4
+    ref_max = 2 ** (bits - 1) - 1   # 7
+    zero_point = 2 ** (bits - 1)     # 8
 
     with torch.no_grad():
-        # Find the maximum value (with sign) for each block
-        # Shape: (out_dim, block_num, 1)
+        # Shape after per_block_reshape: (out_dim, block_num, block_size)
         w_max = w.max(dim=-1, keepdim=True).values
+        w_scale = w_max / ref_max
 
-        # Compute scale factor: d = max / min_val
-        # For INT4: d = max / -8
-        w_scale = w_max / min_val
+        # Fallback for blocks with negative max
+        neg_mask = w_scale < 0
+        if neg_mask.any():
+            fallback = w[neg_mask.expand_as(w)].view(neg_mask.sum(), -1).abs().max(dim=-1, keepdim=True).values / ref_max
+            w_scale = torch.where(neg_mask, fallback, w_scale)
 
-        # Handle zero scale (add epsilon to prevent division by zero)
-        w_scale = torch.where(
-            w_scale.abs() < epsilon,
-            torch.tensor(epsilon, device=w_scale.device, dtype=w_scale.dtype),
-            w_scale
-        )
+        w_scale = w_scale.clamp_(min=epsilon)
 
-        # Quantization formula: q = clamp(round(w / scale + zero_point), 0, 2^bits - 1)
-        # This maps [min_val, max_val] range to [0, 2^bits - 1] storage range
-        w_div_scale = w / w_scale
-        w_quant_storage = (w_div_scale + zero_point).round().clamp(0, 2**bits - 1)
-
-        # Dequantization: w = (q - zero_point) * scale
-        # This converts back from [0, 15] storage to [min_val, max_val] * scale
-        w_quant = (w_quant_storage - zero_point) * w_scale
+        q_storage = (w / w_scale + zero_point).round().clamp(0, 2**bits - 1)
+        w_quant = (q_storage - zero_point) * w_scale
 
     return w_quant
 
