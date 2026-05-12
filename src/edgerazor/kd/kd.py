@@ -307,16 +307,28 @@ class KD:
                 'past_key_values': getattr(teacher_outputs, 'past_key_values', None),
             }
         
+        # --- safety: move teacher tensors to student device if needed ---
+        _dev = task_loss.device
+        for _k in teacher_outputs:
+            _v = teacher_outputs[_k]
+            if isinstance(_v, torch.Tensor) and _v.device != _dev:
+                teacher_outputs[_k] = _v.to(_dev)
+            elif isinstance(_v, tuple):
+                teacher_outputs[_k] = tuple(
+                    t.to(_dev) if isinstance(t, torch.Tensor) and t.device != _dev else t
+                    for t in _v
+                )
+
         # Initialize loss dictionary
         loss_dict = {
             'total_loss': 0.0,
-            'task_loss': task_loss.item() if isinstance(task_loss, torch.Tensor) else task_loss,
+            'task_loss': task_loss.detach().item() if isinstance(task_loss, torch.Tensor) else task_loss,
             'distill_loss': 0.0,
             'distill_loss_details': {},
         }
         
         # Compute distillation losses: distill_loss = Σ(alpha_i * loss_i)
-        distill_loss = 0.0
+        distill_loss = torch.tensor(0.0, device=task_loss.device, dtype=task_loss.dtype)
         
         for loss_key, loss_config in self.config.losses.items():
             loss_fn = self.loss_functions[loss_key]
@@ -339,9 +351,9 @@ class KD:
                     kd_config_loss=loss_config
                 )
                 
-                weighted_loss = loss_config.alpha * float(loss_value)
-                distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
+                weighted_loss = loss_config.alpha * loss_value
+                distill_loss = distill_loss + weighted_loss
+                loss_dict['distill_loss_details'][loss_key] = loss_value.detach().item()
             
             # Feature/Hidden states distillation (MSE-based)
             elif loss_config.loss_type == 'hidden_states':
@@ -386,13 +398,13 @@ class KD:
                         # If adaptive layer selection is used, calculate cosine similarity to select layers
                         elif "adaptive" in layer_indices:
                             resolved_indices = resolve_layer_indices_adaptive(
-                                hidden_states=student_features,
+                                hidden_states=teacher_features,
                                 metric=loss_config.layer_index_adaptive_metric,
                                 topk=loss_config.layer_index_adaptive_topk,
                             )
                         
                         # Compute loss for each selected layer and accumulate
-                        layer_loss = 0.0
+                        layer_loss = torch.tensor(0.0, device=task_loss.device, dtype=task_loss.dtype)
                         num_valid_layers = 0
                         
                         for actual_idx in resolved_indices:
@@ -418,7 +430,7 @@ class KD:
                                 kd_config_loss=loss_config
                             )
                             
-                            layer_loss += float(loss_value)
+                            layer_loss = layer_loss + loss_value
                             num_valid_layers += 1
                         
                         if num_valid_layers == 0:
@@ -450,9 +462,9 @@ class KD:
                         kd_config_loss=loss_config
                     )
                 
-                weighted_loss = loss_config.alpha * float(loss_value)
-                distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
+                weighted_loss = loss_config.alpha * loss_value
+                distill_loss = distill_loss + weighted_loss
+                loss_dict['distill_loss_details'][loss_key] = loss_value.detach().item()
             
             # Attention distillation (KLD-based on attention distributions)
             elif loss_config.loss_type == 'attentions':
@@ -495,16 +507,15 @@ class KD:
                             )
                         # Adaptive layer selection based on attention patterns
                         elif "adaptive" in layer_indices:
-                            # For attention, we can use the attention matrices directly
-                            # Flatten attention to (batch_size, num_heads * seq_len * seq_len) for similarity
+                            # For attention, use teacher attention patterns for layer selection
                             resolved_indices = resolve_layer_indices_adaptive(
-                                hidden_states=student_attentions,
+                                hidden_states=teacher_attentions,
                                 metric=loss_config.layer_index_adaptive_metric,
                                 topk=loss_config.layer_index_adaptive_topk,
                             )
                         
                         # Compute loss for each selected layer and accumulate
-                        layer_loss = 0.0
+                        layer_loss = torch.tensor(0.0, device=task_loss.device, dtype=task_loss.dtype)
                         num_valid_layers = 0
                         
                         for actual_idx in resolved_indices:
@@ -534,9 +545,16 @@ class KD:
                                 student_num_heads = student_attn.shape[1]
                                 
                                 if teacher_num_heads > student_num_heads:
+                                    if teacher_num_heads % student_num_heads != 0:
+                                        self.logger.warning(
+                                            f'{loss_key}: teacher heads ({teacher_num_heads}) '
+                                            f'not divisible by student heads ({student_num_heads}), '
+                                            f'skipping layer {actual_idx}'
+                                        )
+                                        continue
                                     # Group teacher heads and average
                                     heads_per_group = teacher_num_heads // student_num_heads
-                                    teacher_attn = teacher_attn.view(
+                                    teacher_attn = teacher_attn.reshape(
                                         teacher_attn.shape[0],
                                         student_num_heads,
                                         heads_per_group,
@@ -560,7 +578,7 @@ class KD:
                                 kd_config_loss=loss_config
                             )
                             
-                            layer_loss += float(loss_value)
+                            layer_loss = layer_loss + loss_value
                             num_valid_layers += 1
                         
                         if num_valid_layers == 0:
@@ -595,9 +613,9 @@ class KD:
                         kd_config_loss=loss_config
                     )
                 
-                weighted_loss = loss_config.alpha * float(loss_value)
-                distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
+                weighted_loss = loss_config.alpha * loss_value
+                distill_loss = distill_loss + weighted_loss
+                loss_dict['distill_loss_details'][loss_key] = loss_value.detach().item()
             
             # Past key values distillation (Value-Value relation based)
             elif loss_config.loss_type == 'past_key_values':
@@ -627,8 +645,14 @@ class KD:
                     continue
                 
                 # Determine which component to use: 'key', 'value', or 'both'
-                kv_component = loss_config.self_relation_dsitill_component
-                
+                kv_component = loss_config.self_relation_distill_component
+                if kv_component not in ('key', 'value', 'both'):
+                    self.logger.warning(
+                        f'{loss_key}: unknown kv_component "{kv_component}", '
+                        f'defaulting to "value"'
+                    )
+                    kv_component = 'value'
+
                 if loss_config.layer_index is not None:
                     # If past_key_values is Cache, select specific layers
                     if isinstance(student_past, Cache):
@@ -653,8 +677,8 @@ class KD:
                             )
                         # Adaptive layer selection based on key/value patterns
                         elif "adaptive" in layer_indices:
-                            # Extract value states for adaptive selection
-                            value_states = tuple(kv[1] for kv in student_past)
+                            # Extract value states from teacher for adaptive selection
+                            value_states = tuple(kv[1] for kv in teacher_past)
                             resolved_indices = resolve_layer_indices_adaptive(
                                 hidden_states=value_states,
                                 metric=loss_config.layer_index_adaptive_metric,
@@ -662,7 +686,7 @@ class KD:
                             )
                         
                         # Compute loss for each selected layer and accumulate
-                        layer_loss = 0.0
+                        layer_loss = torch.tensor(0.0, device=task_loss.device, dtype=task_loss.dtype)
                         num_valid_layers = 0
                         
                         for actual_idx in resolved_indices:
@@ -717,8 +741,15 @@ class KD:
                                     student_num_heads = student_vv.shape[1]
                                     
                                     if teacher_num_heads > student_num_heads:
+                                        if teacher_num_heads % student_num_heads != 0:
+                                            self.logger.warning(
+                                                f'{loss_key}: teacher heads ({teacher_num_heads}) '
+                                                f'not divisible by student heads ({student_num_heads}), '
+                                                f'skipping layer {actual_idx}'
+                                            )
+                                            continue
                                         heads_per_group = teacher_num_heads // student_num_heads
-                                        teacher_vv = teacher_vv.view(
+                                        teacher_vv = teacher_vv.reshape(
                                             teacher_vv.shape[0],
                                             student_num_heads,
                                             heads_per_group,
@@ -758,8 +789,15 @@ class KD:
                                     student_num_heads = student_kk.shape[1]
                                     
                                     if teacher_num_heads > student_num_heads:
+                                        if teacher_num_heads % student_num_heads != 0:
+                                            self.logger.warning(
+                                                f'{loss_key}: teacher heads ({teacher_num_heads}) '
+                                                f'not divisible by student heads ({student_num_heads}), '
+                                                f'skipping layer {actual_idx}'
+                                            )
+                                            continue
                                         heads_per_group = teacher_num_heads // student_num_heads
-                                        teacher_kk = teacher_kk.view(
+                                        teacher_kk = teacher_kk.reshape(
                                             teacher_kk.shape[0],
                                             student_num_heads,
                                             heads_per_group,
@@ -815,7 +853,7 @@ class KD:
                                     kd_config_loss=loss_config
                                 )
                             
-                            layer_loss += float(loss_value)
+                            layer_loss = layer_loss + loss_value
                             num_valid_layers += 1
                         
                         if num_valid_layers == 0:
@@ -871,8 +909,15 @@ class KD:
                             student_num_heads = student_vv.shape[1]
                             
                             if teacher_num_heads > student_num_heads:
+                                if teacher_num_heads % student_num_heads != 0:
+                                    self.logger.warning(
+                                        f'{loss_key}: teacher heads ({teacher_num_heads}) '
+                                        f'not divisible by student heads ({student_num_heads}), '
+                                        f'skipping layer {layer_idx}'
+                                    )
+                                    continue
                                 heads_per_group = teacher_num_heads // student_num_heads
-                                teacher_vv = teacher_vv.view(
+                                teacher_vv = teacher_vv.reshape(
                                     teacher_vv.shape[0],
                                     student_num_heads,
                                     heads_per_group,
@@ -899,9 +944,9 @@ class KD:
                         )
                         continue
                 
-                weighted_loss = loss_config.alpha * float(loss_value)
-                distill_loss += weighted_loss
-                loss_dict['distill_loss_details'][loss_key] = float(loss_value)
+                weighted_loss = loss_config.alpha * loss_value
+                distill_loss = distill_loss + weighted_loss
+                loss_dict['distill_loss_details'][loss_key] = loss_value.detach().item()
             
             # Unknown loss type
             else:
@@ -910,13 +955,14 @@ class KD:
                 )
         
         # Finalize loss dictionary
-        loss_dict['distill_loss'] = distill_loss
-        
+        loss_dict['distill_loss'] = distill_loss.detach().item()
+
         # Compute total loss with task_loss alpha weighting
         # total_loss = loss_task_alpha * task_loss + distill_loss
+        # Both terms are tensors — gradients flow through both
         weighted_task_loss = self.config.loss_task_alpha * task_loss
         total_loss = weighted_task_loss + distill_loss
-        loss_dict['total_loss'] = total_loss.item()
+        loss_dict['total_loss'] = total_loss.detach().item()
         
         return total_loss, loss_dict
     

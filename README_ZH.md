@@ -196,7 +196,8 @@ python app.py
 
 EdgeRazor 正在持续不断发展！以下是即将推出的内容：
 
-- [x] 一系列轻量化大模型的训练代码
+- [x] 一系列轻量化大模型的训练代码（MobileLLM、Qwen3 和 Qwen2.5-Omni）
+- [x] 新的针对文本模型压缩的API上线：EdgeRazorCausalLMTrainer
 - [ ] 升级针对最新依赖库的支持
 
 有任何想法或建议吗？我们欢迎任何贡献和合作！请随时提交 issues 或 pull requests！🚀
