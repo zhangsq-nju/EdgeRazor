@@ -194,6 +194,7 @@ Quantization-Aware Distillation (QAD):
 EdgeRazor is continuously evolving! Here's what's coming:
 
 - [x] Lightweight MobileLLM, Qwen3, and Qwen2.5-Omni: training code
+- [x] New API: EdgeRazorCausalLMTrainer for compressing text LLMs
 - [ ] Upgrade to support the newest dependencies
 
 Have ideas or suggestions? We welcome and appreciate any contributions and collaborations! Please feel free to submit issues or pull requests! 🚀

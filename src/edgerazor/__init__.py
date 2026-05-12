@@ -37,21 +37,17 @@ from .edgerazor_config import EdgeRazorConfig
 from .kd import KD, DistillConfig
 from .qat import QAT, QuantConfig
 from .qat.map import quant_config_map
+from .trainer import EdgeRazorCausalLMTrainer
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
 
 __all__ = [
-    # Unified API
-    "EdgeRazor",
-    # Trainer API TODO
-    # "EdgeRazorTrainer",
-    # Module APIs
-    "QAT",
-    "KD",
-    # Configuration classes
-    "EdgeRazorConfig",
-    "QuantConfig",
-    "DistillConfig",
-    # Quantization configuration map
-    "quant_config_map",
+    "EdgeRazor",                 # Unified API
+    "EdgeRazorConfig",           # Unified configuration class
+    "QAT",                       # QAT API
+    "QuantConfig",               # QAT configuration class
+    "KD",                        # KD API
+    "DistillConfig",             # KD configuration class
+    "quant_config_map",          # Quantization configuration map
+    "EdgeRazorCausalLMTrainer",  # Trainer API
 ]

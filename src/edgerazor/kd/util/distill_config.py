@@ -57,7 +57,7 @@ class LossConfig:
     layer_index_adaptive_metric: str = "cosine_similarity"  # e.g., "l2", "cosine", etc.
     layer_index_adaptive_topk: int = 3  # Number of top layers to select based on adaptive metric
     
-    self_relation_dsitill_component: str = "value"  # for attention distillation: "key", "value", "both"
+    self_relation_distill_component: str = "value"  # for attention distillation: "key", "value", "both"
     
     def __post_init__(self):
         """Validate configuration parameters"""
