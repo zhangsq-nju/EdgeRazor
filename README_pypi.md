@@ -43,12 +43,12 @@ EdgeRazor achieves the state-of-the-art performance across a range of models, in
 
 ## News
 
-- 🔥 **[2026-04]**: 📄 Paper-EdgeRazor is available on arXiv: [2605.04062](https://arxiv.org/abs/2605.04062)!
+- 🔥 **[2026-04]**: 📄 Paper-EdgeRazor is available on [arXiv:2605.04062](https://arxiv.org/abs/2605.04062) and [Hugging Face Paper](https://huggingface.co/papers/2605.04062)!
 - 🔥 **[2026-04]**: 🚀 [EdgeRazor Playground](https://huggingface.co/spaces/zhangsq-nju/EdgeRazor-Playground) is launched and open-sourced! CPU-friendly! Have a try!
 - 🔥 **[2026-04]**: 🏅 [CACC 2025 Final](https://cacc.ccf.org.cn/#/tzgg/%E9%80%9A%E7%9F%A5%E5%85%AC%E5%91%8A/6ce6fd51cffa62eb3859a8bb80af1040) (China Algorithm Capability Competition) apply EdgeRazor as a solution in the AI subject!
 - 🔥 **[2026-04]**: 🏆 Low-bit LLMs by EdgeRazor is released! Check our Hugging Face collection: [zhangsq-nju/edgerazor-nbit](https://huggingface.co/collections/zhangsq-nju/edgerazor-nbit).
 - 🔥 **[2026-04]**: 🛠️ Open-sourced EdgeRazor-V1 is released! Now configurable on diverse models for seamless integration and customization!
-- 🔥 **[2025-10]**: 📄 Paper-TernaryCLIP is available on arXiv: [2510.21879](https://arxiv.org/abs/2510.21879)!
+- 🔥 **[2025-10]**: 📄 Paper-TernaryCLIP is available on [arXiv:2510.21879](https://arxiv.org/abs/2510.21879)!
 
 ## Contents
 

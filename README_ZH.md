@@ -45,11 +45,11 @@ EdgeRazor 在多类模型上均取得了当前最先进表现，涵盖基础大�
 
 ## 最新消息
 
-- 🔥 **[2026-04]**: 📄 论文-EdgeRazor 已在 arXiv 上发布：[2605.04062](https://arxiv.org/abs/2605.04062)！
+- 🔥 **[2026-04]**: 📄 论文-EdgeRazor 已发布，点击查看 [arXiv:2605.04062](https://arxiv.org/abs/2605.04062) 和 [Hugging Face Paper](https://huggingface.co/papers/2605.04062)！
 - 🔥 **[2026-04]**: 🏅 [CCF 算法能力大赛决赛](https://cacc.ccf.org.cn/#/tzgg/%E9%80%9A%E7%9F%A5%E5%85%AC%E5%91%8A/6ce6fd51cffa62eb3859a8bb80af1040)在 AI 赛道使用 EdgRazor作为题目的工具库！人机共舞，智创未来！
 - 🔥 **[2026-04]**: 🏆 由 EdgeRazor 框架训练的低比特大模型已在 Hugging Face 上发布！查看我们的 Hugging Face 模型集：[zhangsq-nju/edgerazor-nbit](https://huggingface.co/collections/zhangsq-nju/edgerazor-nbit)。
 - 🔥 **[2026-04]**: 🛠️ 开源 EdgeRazor-V1 发布！现在可在各种模型的训练流程上无缝集成和定制！
-- 🔥 **[2025-10]**: 📄 论文-TernaryCLIP 已在 arXiv 上发布：[https://arxiv.org/abs/2510.21879](https://arxiv.org/abs/2510.21879)！
+- 🔥 **[2025-10]**: 📄 论文-TernaryCLIP 已发布，点击查看 [arXiv:2510.21879](https://arxiv.org/abs/2510.21879)！
 
 ## Contents
 
