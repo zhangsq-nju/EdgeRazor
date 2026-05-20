@@ -179,6 +179,7 @@ def replace_applied_quantized_weights(
     qconv3d_cls: nn.Module = None,
     qmultiheadattention_cls: nn.Module = None,
     replace_weights=True,
+    **kwargs,
 ) -> nn.Module:
     """Replace weights in quantized modules with their quantized versions."""
     if not replace_weights:

@@ -39,7 +39,7 @@ from .qat import QAT, QuantConfig
 from .qat.map import quant_config_map
 from .trainer import EdgeRazorCausalLMTrainer
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 __all__ = [
     "EdgeRazor",                 # Unified API

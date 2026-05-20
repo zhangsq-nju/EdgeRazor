@@ -67,6 +67,7 @@ EdgeRazor achieves the state-of-the-art performance across a range of models, in
   - [LLMs](#llms)
   - [MLLMs](#mllms)
 - [Todo List](#todo-list)
+- [Acknowledgements](#acknowledgements)
 - [Citation](#citation)
 - [Contributor List](#contributor-list)
 
@@ -200,6 +201,10 @@ EdgeRazor is continuously evolving! Here's what's coming:
 - [ ] Upgrade to support the newest dependencies
 
 Have ideas or suggestions? We welcome and appreciate any contributions and collaborations! Please feel free to submit issues or pull requests! 🚀
+
+## Acknowledgements
+
+The deployment demos utilize [llama.cpp](https://github.com/ggml-org/llama.cpp) and [ChatterUI](https://github.com/Vali-98/ChatterUI).
 
 ## Citation
 

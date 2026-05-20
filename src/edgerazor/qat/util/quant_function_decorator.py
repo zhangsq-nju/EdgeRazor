@@ -95,7 +95,21 @@ def per_block_reshape(func):
     block_size_default = block_size_param.default if block_size_param is not None else None
 
     @functools.wraps(func)
-    def wrapper(x: Tensor, *args, **kwargs):
+    def wrapper(*args, **kwargs):
+        # Extract the tensor: first positional arg, or keyword 'w'/'x'
+        if args:
+            x = args[0]
+            args = args[1:]
+        elif 'w' in kwargs:
+            x = kwargs.pop('w')
+        elif 'x' in kwargs:
+            x = kwargs.pop('x')
+        else:
+            raise TypeError(
+                f"{func.__name__}() missing required tensor argument; "
+                f"pass as first positional arg or keyword 'w'/'x'"
+            )
+
         block_size = kwargs.get('block_size', block_size_default)
 
         original_shape = x.shape
@@ -156,7 +170,21 @@ def mixed_precision_quantize(func):
     wsf_default = wsf_param.default if wsf_param is not None else 2.0
 
     @functools.wraps(func)
-    def wrapper(x: Tensor, *args, **kwargs):
+    def wrapper(*args, **kwargs):
+        # Extract the tensor: first positional arg, or keyword 'w'/'x'
+        if args:
+            x = args[0]
+            args = args[1:]
+        elif 'w' in kwargs:
+            x = kwargs.pop('w')
+        elif 'x' in kwargs:
+            x = kwargs.pop('x')
+        else:
+            raise TypeError(
+                f"{func.__name__}() missing required tensor argument; "
+                f"pass as first positional arg or keyword 'w'/'x'"
+            )
+
         block_size = kwargs.get('block_size', block_size_default)
         epsilon = kwargs.get('epsilon', eps_default)
         w_scale_factor = kwargs.get('w_scale_factor', wsf_default)
