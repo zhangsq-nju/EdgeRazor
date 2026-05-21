@@ -153,3 +153,18 @@ class TestQuantSelectorComposite:
         selector = QuantSelector(SelectConfig(target_types={nn.Linear}))
         quant_map = selector.analyze_model(model)
         assert quant_map["custom"].should_quant is True
+
+
+class TestQuantSelectorKVCache:
+    def test_has_kv_cache_true(self):
+        selector = QuantSelector(SelectConfig(
+            target_types={nn.Linear},
+            kv_cache=True,
+        ))
+        assert selector.has_kv_cache is True
+
+    def test_has_kv_cache_false_by_default(self):
+        selector = QuantSelector(SelectConfig(
+            target_types={nn.Linear},
+        ))
+        assert selector.has_kv_cache is False

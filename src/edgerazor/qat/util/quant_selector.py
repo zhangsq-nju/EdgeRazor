@@ -129,6 +129,11 @@ class QuantSelector:
             if self._is_composite_module(child):
                 self._analyze_recursive(child, full_name)
 
+    @property
+    def has_kv_cache(self) -> bool:
+        """Whether KV cache quantization is enabled via the 'kv_cache' meta-target."""
+        return self.quant_select_config.kv_cache
+
     def get_modules_to_quantize(self) -> list[str]:
         """Get list of module names to be quantized"""
         return [

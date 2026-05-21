@@ -117,16 +117,31 @@ class EdgeRazor:
     def replace_quantized_weights(self, model: nn.Module) -> nn.Module:
         """
         Replace model weights with quantized versions (if QAT enabled).
-        
+
         Args:
             model: PyTorch model
-        
+
         Returns:
             Model with quantized weights (if QAT enabled), otherwise unchanged
         """
         self.model = self.qat.replace_quantized_weights(model) if self.qat else model
         return self.model
-    
+
+    def create_kv_cache(self, model_config=None):
+        """Create a QuantizedKVState for KV cache quantization if configured.
+
+        Returns None when QAT is disabled or kv_cache is not selected.
+        The returned cache wraps a fresh DynamicCache and must be passed as
+        ``past_key_values`` to the model's forward call.
+
+        Args:
+            model_config: Optional PretrainedConfig for DynamicCache so
+                sliding-window and hybrid layers are handled correctly.
+        """
+        if self.qat is None:
+            return None
+        return self.qat.create_kv_cache(model_config=model_config)
+
     def compute_loss(
         self,
         student_outputs: dict | torch.Tensor,

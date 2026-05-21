@@ -1,0 +1,39 @@
+# W1.58-A8-KV8
+qat_configuration:
+  method: QAT
+  select:
+    target_types:
+    - linear
+    - kv_cache
+    target_names: []
+    exclude_types: []
+    exclude_names: ["lm_head"]
+  function:
+    epsilon: 1.0e-05
+    weight_function: weight_quant_uniform_symmetric_clip_per_block_int1_58
+    w_scale_factor: 2.0
+    w_block_size: 256
+    is_w_quantized: False
+    activation_function: state_quant_uniform_symmetric_absmax_per_block_int8
+    a_block_size: 256
+    kv_cache_function: state_quant_uniform_symmetric_absmax_per_block_int8
+    kv_block_size: 128
+kd_configuration:
+  method: KD
+  loss_task_alpha: 0.10
+  loss_1:
+    loss_type: logits
+    loss_function: compute_kld_confidence
+    alpha: 2.0
+    temperature: 1.0
+    padding_id: -100
+    use_entropy: True
+    confidence_k: 16
+    reduction: batch_mean
+  loss_2:
+    loss_type: hidden_states
+    loss_function: compute_mse
+    alpha: 0.10
+    layer_index: adaptive
+    padding_id: -100
+    reduction: batch_mean

@@ -96,16 +96,34 @@ After installation, you can integrate EdgeRazor into your existing training pipe
 
 1. Use unified configuration by [yaml](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.yaml), [json](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.json) or [dict](https://github.com/zhangsq-nju/EdgeRazor/tree/main/example/configs/qad/qat_w4_a8_kd_fd.py).
 
-2. Seamlessly integrate EdgeRazor into your FULL-PRECISION model training and enjoy your lightweight journey!
+2. Seamlessly integrate EdgeRazor into your FULL-PRECISION model training pipeline!
+
+3. Below are LLM examples of both the high-level and low-level API usage
 
 ```python
-# Init EdgeRazor for lightweight model
-edgerazor = EdgeRazor(config="/path/to/config.yaml")
+# High-level API Usage
+trainer = EdgeRazorCausalLMTrainer(
+  model=student,
+  args=TrainingArguments(...),
+  train_dataset=train_dataset,
+  data_collator=data_collator,
+  processing_class=tokenizer,
+  teacher_model=teacher,
+  edgerazor_config="/path/to/w1.58-a8-kv8.yaml",
+)
+trainer.train()
+trainer.model.save_pretrained("/path/to/qmodel")
+tokenizer.save_pretrained("/path/to/qmodel")
+```
+
+```python
+# Low-level API Usage
+edgerazor = EdgeRazor(config="/path/to/w1.58-a8-kv8.yaml")
 student = edgerazor.quantize(student)
-# Training loop
-student_outputs = student(inputs)
-teacher_outputs = teacher(inputs)
-# Calculate loss
+kv_cache_quant = edgerazor.create_kv_cache(model_config=student.config)
+# Training loop:
+student_outputs = student(**inputs, kv_cache_quant)
+teacher_outputs = teacher(**inputs)
 loss, loss_dict = edgerazor.compute_loss(student_outputs, teacher_outputs, labels)
 ```
 

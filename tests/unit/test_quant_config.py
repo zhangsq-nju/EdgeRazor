@@ -259,6 +259,87 @@ class TestQuantConfigStrRepr:
         assert repr(cfg) == str(cfg)
 
 
+class TestKVCacheMetaTarget:
+    """Tests for the 'kv_cache' pseudo-module target type."""
+
+    def test_kv_cache_in_target_types_sets_flag(self):
+        cfg = QuantConfig({
+            "method": "QAT",
+            "select": {"target_types": ["linear", "kv_cache"]},
+            "function": {
+                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+            },
+        })
+        assert cfg.select.kv_cache is True
+        assert nn.Linear in cfg.select.target_types
+        # kv_cache should NOT be in the nn.Module target_types set
+        assert len(cfg.select.target_types) == 1
+
+    def test_kv_cache_not_in_target_types(self):
+        cfg = QuantConfig({
+            "method": "QAT",
+            "select": {"target_types": ["linear"]},
+            "function": {
+                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+            },
+        })
+        assert cfg.select.kv_cache is False
+
+    def test_kv_cache_in_exclude_types_disables(self):
+        """If kv_cache is in target_types but also in exclude_types, it's disabled."""
+        cfg = QuantConfig({
+            "method": "QAT",
+            "select": {
+                "target_types": ["linear", "kv_cache"],
+                "exclude_types": ["kv_cache"],
+            },
+            "function": {
+                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+            },
+        })
+        assert cfg.select.kv_cache is False
+
+    def test_kv_cache_default_false(self):
+        cfg = QuantConfig({})
+        assert cfg.select.kv_cache is False
+
+    def test_to_dict_includes_kv_cache(self):
+        cfg = QuantConfig({
+            "method": "QAT",
+            "select": {"target_types": ["linear", "kv_cache"]},
+            "function": {
+                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+            },
+        })
+        d = cfg.to_dict()
+        assert "kv_cache" in d["select"]["target_types"]
+        assert "linear" in d["select"]["target_types"]
+
+    def test_to_dict_roundtrip_preserves_kv_cache(self):
+        cfg = QuantConfig({
+            "method": "QAT",
+            "select": {"target_types": ["linear", "kv_cache"]},
+            "function": {
+                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+            },
+        })
+        d = cfg.to_dict()
+        restored = QuantConfig(d)
+        assert restored.select.kv_cache is True
+        assert nn.Linear in restored.select.target_types
+
+    def test_to_dict_without_kv_cache(self):
+        cfg = QuantConfig({
+            "method": "QAT",
+            "select": {"target_types": ["linear"]},
+            "function": {
+                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+            },
+        })
+        d = cfg.to_dict()
+        assert "kv_cache" not in d["select"]["target_types"]
+
+
 class TestFunctionNameResolution:
     """Test that function names get resolved to actual callables."""
 

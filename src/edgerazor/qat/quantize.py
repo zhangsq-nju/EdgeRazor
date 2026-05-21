@@ -1,22 +1,8 @@
 import torch.nn as nn
 from transformers import PreTrainedModel
-from transformers.models.llama.modeling_llama import LlamaAttention
-from transformers.models.olmoe.modeling_olmoe import (
-    OlmoeAttention,
-    OlmoeFlashAttention2,
-    OlmoeSdpaAttention,
-)
-from transformers.models.qwen2_5_omni.modeling_qwen2_5_omni import Qwen2_5OmniAttention
-from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention
-from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeAttention
 
 from .block import (
-    copy_llamaattention_to_qkvcache_llamaattention,
     copy_multiheadattention_to_qmultiheadattention,
-    copy_olmoeattention_qkvcache_olmoeattention,
-    copy_qwen2_5omniattention_to_qkvcache_qwen2_5omniattention,
-    copy_qwen3attention_to_qkvcache_qwen3attention,
-    copy_qwen3moeattention_to_qkvcache_qwen3moeattention,
 )
 from .module import (
     copy_conv1d_to_qconv1d,
@@ -27,17 +13,11 @@ from .module import (
 )
 from .util import QuantConfig, QuantSelector
 
-# (source_type, qclass_key, copy_function)
+# Attention block types that need structural replacement.
+# KV Cache quantization is handled separately via QuantizedKVState (Cache wrapper),
+# so we only replace nn.MultiheadAttention (which uses nn.Parameter for weights).
 _BLOCK_REPLACEMENT_SPEC = [
     (nn.MultiheadAttention,  'qmultiheadattention_cls',            copy_multiheadattention_to_qmultiheadattention),
-    # Olmoe subclasses before parent
-    (OlmoeFlashAttention2,   'qkvcacheolmoeflashattention2_cls',   copy_olmoeattention_qkvcache_olmoeattention),
-    (OlmoeSdpaAttention,     'qkvcacheolmoesdpaattention_cls',     copy_olmoeattention_qkvcache_olmoeattention),
-    (OlmoeAttention,         'qkvcacheolmoeattention_cls',         copy_olmoeattention_qkvcache_olmoeattention),
-    (Qwen2_5OmniAttention,   'qkvcacheqwen2_5omniattention_cls',   copy_qwen2_5omniattention_to_qkvcache_qwen2_5omniattention),
-    (Qwen3MoeAttention,      'qkvcacheqwen3moeattention_cls',      copy_qwen3moeattention_to_qkvcache_qwen3moeattention),
-    (Qwen3Attention,         'qkvcacheqwen3attention_cls',         copy_qwen3attention_to_qkvcache_qwen3attention),
-    (LlamaAttention,         'qkvcachellamaattention_cls',         copy_llamaattention_to_qkvcache_llamaattention),
 ]
 
 _MODULE_REPLACEMENT_SPEC = [
@@ -69,10 +49,10 @@ class ModuleSpecificQuantConfig:
         self.base_config = base_config
         self.module_name = module_name
         self.module_type = module_type
-        
+
         # Get the effective function config for this specific module
         self.function = base_config.get_function_config(module_name, module_type)
-        
+
         # Pass through other attributes from base config
         self.method = base_config.method
         self.select = base_config.select
@@ -90,13 +70,6 @@ def apply_quantization(
     qconv2d_cls: nn.Module = None,
     qconv3d_cls: nn.Module = None,
     qmultiheadattention_cls: nn.Module = None,
-    qkvcacheolmoeattention_cls: nn.Module = None,
-    qkvcacheolmoeflashattention2_cls: nn.Module = None,
-    qkvcacheolmoesdpaattention_cls: nn.Module = None,
-    qkvcacheqwen2_5omniattention_cls: nn.Module = None,
-    qkvcacheqwen3attention_cls: nn.Module = None,
-    qkvcacheqwen3moeattention_cls: nn.Module = None,
-    qkvcachellamaattention_cls: nn.Module = None,
 ) -> nn.Module:
     """Apply quantization to the model."""
 
@@ -107,13 +80,6 @@ def apply_quantization(
         'qconv2d_cls': qconv2d_cls,
         'qconv3d_cls': qconv3d_cls,
         'qmultiheadattention_cls': qmultiheadattention_cls,
-        'qkvcacheolmoeattention_cls': qkvcacheolmoeattention_cls,
-        'qkvcacheolmoeflashattention2_cls': qkvcacheolmoeflashattention2_cls,
-        'qkvcacheolmoesdpaattention_cls': qkvcacheolmoesdpaattention_cls,
-        'qkvcacheqwen2_5omniattention_cls': qkvcacheqwen2_5omniattention_cls,
-        'qkvcacheqwen3attention_cls': qkvcacheqwen3attention_cls,
-        'qkvcacheqwen3moeattention_cls': qkvcacheqwen3moeattention_cls,
-        'qkvcachellamaattention_cls': qkvcachellamaattention_cls,
     }
 
     def _replace_structure(parent_module, child_name, new_module):

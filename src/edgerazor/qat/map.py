@@ -7,15 +7,6 @@ Mapping of quantization functions and classes.
 from collections import OrderedDict
 
 import torch.nn as nn
-from transformers.models.llama.modeling_llama import LlamaAttention
-from transformers.models.olmoe.modeling_olmoe import (
-    OlmoeAttention,
-    OlmoeFlashAttention2,
-    OlmoeSdpaAttention,
-)
-from transformers.models.qwen2_5_omni.modeling_qwen2_5_omni import Qwen2_5OmniAttention
-from transformers.models.qwen3.modeling_qwen3 import Qwen3Attention
-from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeAttention
 
 # Import directly from the source module to avoid circular import
 from .util.quant_function import (
@@ -95,13 +86,6 @@ modules_map = {
     "conv2d": nn.Conv2d,
     "conv3d": nn.Conv3d,
     "multiheadattention": nn.MultiheadAttention,
-    "olmoeattention": OlmoeAttention,
-    "olmoesdpaattention": OlmoeSdpaAttention,
-    "olmoeflashattention2": OlmoeFlashAttention2,
-    "qwen3moeattention": Qwen3MoeAttention,
-    "qwen3attention": Qwen3Attention,
-    "qwen2_5omniattention": Qwen2_5OmniAttention,
-    "llamaattention": LlamaAttention,
 }
 
 
@@ -121,9 +105,7 @@ def create_w1_58_config(
     """
     target_types = ["linear", "embedding"]
     if with_activation_kv:
-        target_types.append("qwen3attention")
-        target_types.append("qwen2_5omniattention")
-        target_types.append("llamaattention")
+        target_types.append("kv_cache")
     
     config = OrderedDict(
         [
@@ -195,9 +177,7 @@ def create_w1_58_config_embint4(
     """
     target_types = ["linear", "embedding"]
     if with_activation_kv:
-        target_types.append("qwen3attention")
-        target_types.append("qwen2_5omniattention")
-        target_types.append("llamaattention")
+        target_types.append("kv_cache")
 
     config = OrderedDict(
         [
@@ -314,7 +294,7 @@ w4a8kv8_qwen3 = OrderedDict(
             "select",
             OrderedDict(
                 [
-                    ("target_types", ["linear", "embedding", "qwen3attention", "qwen2_5omniattention", "llamaattention"]),
+                    ("target_types", ["linear", "embedding", "kv_cache"]),
                     ("target_names", []),
                     ("exclude_types", []),
                     ("exclude_names", []),
@@ -359,7 +339,7 @@ w4a8kv8_qwen2_5_omni = OrderedDict(
             "select",
             OrderedDict(
                 [
-                    ("target_types", ["linear", "embedding", "qwen2_5omniattention"]),
+                    ("target_types", ["linear", "embedding", "kv_cache"]),
                     ("target_names", []),
                     ("exclude_types", []),
                     ("exclude_names", ["thinker.audio_tower.*", "talker.*", "token2wav.*"]),
@@ -404,7 +384,7 @@ w4a8kv8_mobilellm = OrderedDict(
             "select",
             OrderedDict(
                 [
-                    ("target_types", ["linear", "embedding", "qwen3attention", "qwen2_5omniattention", "llamaattention"]),
+                    ("target_types", ["linear", "embedding", "kv_cache"]),
                     ("target_names", []),
                     ("exclude_types", []),
                     ("exclude_names", []),
@@ -489,7 +469,7 @@ w1_58a8kv8_qwen3 = OrderedDict(
             "select",
             OrderedDict(
                 [
-                    ("target_types", ["linear", "embedding", "qwen3attention", "qwen2_5omniattention", "llamaattention"]),
+                    ("target_types", ["linear", "embedding", "kv_cache"]),
                     ("target_names", []),
                     ("exclude_types", []),
                     ("exclude_names", []),

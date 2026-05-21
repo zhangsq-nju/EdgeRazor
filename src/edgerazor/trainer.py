@@ -41,7 +41,6 @@ from typing import Optional
 
 import torch
 from transformers import Trainer
-from transformers.models.olmoe.modeling_olmoe import OlmoeForCausalLM
 
 from .edgerazor import EdgeRazor
 from .edgerazor_config import EdgeRazorConfig
@@ -153,6 +152,13 @@ class EdgeRazorCausalLMTrainer(Trainer):
         if auto_prepare and self.edgerazor.is_qat_enabled:
             model = self.edgerazor.quantize(model)
 
+        # --- store model config for KV cache creation ---
+        self._model_config = getattr(model, 'config', None)
+        self._kv_cache_enabled = (
+            self.edgerazor.is_qat_enabled
+            and self.edgerazor.qat.selector.has_kv_cache
+        )
+
         super().__init__(
             model=model,
             args=args,
@@ -204,13 +210,18 @@ class EdgeRazorCausalLMTrainer(Trainer):
         _is_training = model.training
 
         # --- student forward ---
-        student_outputs = model(
-            **inputs,
-            return_dict=True,
-            output_hidden_states=_is_training and self._kd_needs_hidden_states,
-            output_attentions=_is_training and self._kd_needs_attentions,
-            output_router_logits=True,
-        )
+        forward_kwargs: dict = {
+            "return_dict": True,
+            "output_hidden_states": _is_training and self._kd_needs_hidden_states,
+            "output_attentions": _is_training and self._kd_needs_attentions,
+            "output_router_logits": True,
+        }
+        if self._kv_cache_enabled:
+            forward_kwargs['past_key_values'] = self.edgerazor.create_kv_cache(
+                model_config=self._model_config,
+            )
+
+        student_outputs = model(**inputs, **forward_kwargs)
 
         # --- eval: skip teacher forward and KD, return task loss only ---
         if not _is_training:

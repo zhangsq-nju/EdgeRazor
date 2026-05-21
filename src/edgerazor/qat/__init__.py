@@ -9,12 +9,9 @@
 # ruff: noqa: F401
 
 from .block import (
-    QKVCacheLlamaAttention,
-    QKVCacheOlmoeAttention,
-    QKVCacheOlmoeFlashAttention2,
-    QKVCacheOlmoeSdpaAttention,
-    QKVCacheQwen2_5OmniAttention,
     QMultiheadAttention,
+    QuantizedKVState,
+    create_quantized_kv_cache,
 )
 from .module import QConv1d, QConv2d, QConv3d, QEmbedding, QLinear
 from .qat import QAT
@@ -32,9 +29,7 @@ __all__ = [
     "QConv3d",
     # Quantized attention blocks
     "QMultiheadAttention",
-    "QKVCacheOlmoeAttention",
-    "QKVCacheOlmoeFlashAttention2",
-    "QKVCacheOlmoeSdpaAttention",
-    "QKVCacheQwen2_5OmniAttention",
-    "QKVCacheLlamaAttention",
+    # KV Cache quantization
+    "QuantizedKVState",
+    "create_quantized_kv_cache",
 ]
