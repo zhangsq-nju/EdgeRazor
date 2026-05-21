@@ -1,9 +1,9 @@
-"""Nox configuration for EdgeRazor multi-Python and multi-dependency testing.
+"""Nox configuration for EdgeRazor multi-dependency testing.
 
 Usage:
     nox                         # Run all sessions
-    nox -s tests-3.10           # Python 3.10, all combos
-    nox -s tests-3.10-4.57.1-2.9.1  # Specific combo
+    nox -s tests                # All torch × transformers combos
+    nox -s tests-4.57.6-2.12.0 # Specific combo
     nox -s lint                 # Linting only
     nox -s e2e                  # End-to-end tests
     nox -l                      # List sessions
@@ -11,16 +11,17 @@ Usage:
 
 import nox
 
-TRANSFORMERS_VERSIONS = ["4.55.0", "4.56.0", "4.57.1"]
-TORCH_VERSIONS = ["2.8.0", "2.9.1"]
+TRANSFORMERS_VERSIONS = ["4.55.0", "4.56.0", "4.57.6"]
+TORCH_VERSIONS = ["2.8.0", "2.9.0", "2.10.0", "2.11.0", "2.12.0"]
 
 # torchvision versions paired with torch releases
 TORCHVISION_MAP = {
     "2.8.0": "0.23.0",
-    "2.9.1": "0.24.1",
+    "2.9.0": "0.24.0",
+    "2.10.0": "0.25.0",
+    "2.11.0": "0.26.0",
+    "2.12.0": "0.27.0",
 }
-
-PYTHON_VERSIONS = ["3.10", "3.11", "3.12"]
 
 
 def _install_deps(session, transformers_version, torch_version):
@@ -29,13 +30,13 @@ def _install_deps(session, transformers_version, torch_version):
     session.install("pyyaml==6.0.3", "pyfiglet>=1.0.0", "colorama>=0.4.0")
     session.install(f"transformers=={transformers_version}")
 
-    tv = TORCHVISION_MAP.get(torch_version, "0.20.0")
+    tv = TORCHVISION_MAP.get(torch_version, "0.23.0")
     session.install(f"torch=={torch_version}", f"torchvision=={tv}")
 
     session.install("-e", ".[dev]", silent=False)
 
 
-@nox.session(python=PYTHON_VERSIONS)
+@nox.session
 @nox.parametrize("tf", TRANSFORMERS_VERSIONS)
 @nox.parametrize("torch_v", TORCH_VERSIONS)
 def tests(session, tf, torch_v):
@@ -52,10 +53,10 @@ def tests(session, tf, torch_v):
     )
 
 
-@nox.session(python=PYTHON_VERSIONS)
+@nox.session
 def e2e(session):
     """Run end-to-end tests."""
-    _install_deps(session, "4.57.1", "2.9.1")
+    _install_deps(session, "4.57.6", "2.12.0")
     session.run("pytest", "tests/e2e", "-v", "--tb=short", *session.posargs)
 
 
@@ -75,10 +76,10 @@ def format_check(session):
     session.run("ruff", "format", "--check", "tests/")
 
 
-@nox.session(python="3.10")
+@nox.session
 def coverage(session):
     """Run full test suite and generate HTML coverage report."""
-    _install_deps(session, "4.57.1", "2.9.1")
+    _install_deps(session, "4.57.6", "2.12.0")
     session.run(
         "pytest", "tests/",
         "--cov=edgerazor",

@@ -1,50 +1,89 @@
 """End-to-end tests for the full EdgeRazor pipeline.
 
-These tests simulate a complete training workflow including:
-1. Configuration loading
-2. Model quantization (QAT)
-3. Loss computation with knowledge distillation (KD)
-4. Gradient backpropagation
+Tests the complete lifecycle:
+1. Build model + config
+2. Quantize (QAT)
+3. Training loop with KD (QAD)
+4. Replace weights
+5. Save model
+6. Load model
+7. Inference
 
-Note: Some forward-pass tests are adapted to work around known issues in
-the quantization function signatures. The quantization structural replacement
-is tested independently of the forward computation.
+These are the highest-level tests that verify the framework works
+as an integrated whole, not just individual components.
 """
+
+import json
 
 import pytest
 import torch
 import torch.nn as nn
 
+from edgerazor import EdgeRazor
+from edgerazor.qat.module import QEmbedding, QLinear
 
-class TestFullQATPipeline:
-    """End-to-end QAT pipeline: config -> quantize -> verify structure."""
 
-    def test_quantize_sequential_mlp(self):
-        from edgerazor import EdgeRazor
-        from edgerazor.qat.module import QLinear
+# ──────────────────────────────────────────────
+# Test model
+# ──────────────────────────────────────────────
 
-        model = nn.Sequential(
-            nn.Linear(32, 64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, 10),
-        )
+class _E2EModel(nn.Module):
+    """A small but realistic model for E2E testing."""
 
+    def __init__(self, vocab_size=100, hidden_size=64, num_layers=2):
+        super().__init__()
+        self.embed = nn.Embedding(vocab_size, hidden_size)
+        self.layers = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_size, hidden_size),
+                nn.ReLU(),
+            )
+            for _ in range(num_layers)
+        ])
+        self.lm_head = nn.Linear(hidden_size, vocab_size)
+
+    def forward(self, input_ids, labels=None, return_dict=True,
+                output_hidden_states=False):
+        x = self.embed(input_ids)
+        hidden_states = [x] if output_hidden_states else None
+        for layer in self.layers:
+            x = layer(x)
+            if output_hidden_states:
+                hidden_states.append(x)
+        logits = self.lm_head(x)
+        loss = None
+        if labels is not None:
+            loss = nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)), labels.view(-1)
+            )
+        result = {"logits": logits, "loss": loss}
+        if output_hidden_states:
+            result["hidden_states"] = tuple(hidden_states)
+        return result
+
+
+# ──────────────────────────────────────────────
+# E2E: QAT only
+# ──────────────────────────────────────────────
+
+class TestE2EQATOnly:
+    def test_qat_full_lifecycle(self, temp_dir):
+        """Full QAT lifecycle: quantize → train → replace → save → load → infer."""
         config = {
             "method": "QAT",
             "select": {
-                "target_types": ["linear"],
+                "target_types": ["linear", "embedding"],
                 "target_names": [],
                 "exclude_types": [],
                 "exclude_names": [],
             },
             "function": {
-                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+                "epsilon": 1e-5,
+                "weight_function": "weight_quant_uniform_symmetric_clip_per_block_int1_58",
                 "w_scale_factor": 2.0,
-                "w_block_size": 256,
+                "w_block_size": 64,
                 "w_mixed_precision_prop": -1.0,
-                "is_w_quantized": True,
+                "is_w_quantized": False,
                 "activation_function": "",
                 "a_block_size": -1,
                 "a_mixed_precision_prop": -1.0,
@@ -56,217 +95,155 @@ class TestFullQATPipeline:
         }
 
         er = EdgeRazor(qat_config=config)
-        quantized = er.quantize(model)
+        model = _E2EModel()
+        original_param_count = sum(p.numel() for p in model.parameters())
 
-        # Verify all Linear layers are now QLinear
-        for module in quantized:
-            if isinstance(module, nn.Linear):
-                assert isinstance(module, QLinear)
+        # 1. Quantize
+        q_model = er.quantize(model)
+        assert isinstance(q_model.embed, QEmbedding)
+        for layer in q_model.layers:
+            assert isinstance(layer[0], QLinear)
+        assert isinstance(q_model.lm_head, QLinear)
+        assert sum(p.numel() for p in q_model.parameters()) == original_param_count
 
-        # Verify parameter count unchanged
-        orig_params = sum(p.numel() for p in model.parameters())
-        quant_params = sum(p.numel() for p in quantized.parameters())
-        assert quant_params == orig_params
+        # 2. Train
+        q_model.train()
+        optimizer = torch.optim.Adam(q_model.parameters(), lr=0.001)
+        pretrain_params = {n: p.clone() for n, p in q_model.named_parameters()}
+        for _ in range(5):
+            optimizer.zero_grad()
+            inputs = torch.randint(0, 100, (4, 16))
+            out = q_model(inputs, labels=inputs, return_dict=True)
+            out['loss'].backward()
+            optimizer.step()
+        for n, p in q_model.named_parameters():
+            assert not torch.equal(p, pretrain_params[n]), f"{n} did not train"
 
-    def test_quantize_model_with_embedding_and_conv(self):
-        from edgerazor import EdgeRazor
-        from edgerazor.qat.module import QLinear, QEmbedding, QConv2d
+        # 3. Replace weights
+        er.replace_quantized_weights(q_model)
+        assert q_model.embed.is_w_quantized
 
-        class VisionModel(nn.Module):
-            def __init__(self):
-                super().__init__()
-                self.embed = nn.Embedding(100, 32)
-                self.conv = nn.Conv2d(3, 16, 3, padding=1)
-                self.fc = nn.Linear(16 * 8 * 8, 10)
+        # 4. Save
+        save_path = temp_dir / "e2e_qat.pt"
+        torch.save(q_model.state_dict(), save_path)
 
-            def forward(self, x_img, x_idx):
-                x = self.conv(x_img)
-                x = x.reshape(x.size(0), -1)
-                return self.fc(x)
+        # 5. Load into new model
+        new_model = _E2EModel()
+        new_q = er.quantize(new_model)
+        new_q.load_state_dict(torch.load(save_path))
+        torch.testing.assert_close(new_q.embed.weight, q_model.embed.weight)
+        torch.testing.assert_close(new_q.lm_head.weight, q_model.lm_head.weight)
 
-        model = VisionModel()
-        config = {
-            "method": "QAT",
-            "select": {
-                "target_types": ["linear", "embedding", "conv2d"],
-                "target_names": [],
-                "exclude_types": [],
-                "exclude_names": [],
-            },
-            "function": {
-                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
-                "w_scale_factor": 2.0,
-                "w_block_size": 256,
-                "w_mixed_precision_prop": -1.0,
-                "is_w_quantized": True,
-                "activation_function": "",
-                "a_block_size": -1,
-                "a_mixed_precision_prop": -1.0,
-                "kv_cache_function": "",
-                "kv_block_size": -1,
-                "kv_mixed_precision_prop": -1.0,
-            },
-            "training": "all",
-        }
-
-        er = EdgeRazor(qat_config=config)
-        quantized = er.quantize(model)
-
-        assert isinstance(quantized.embed, QEmbedding)
-        assert isinstance(quantized.conv, QConv2d)
-        assert isinstance(quantized.fc, QLinear)
-
-        # Verify parameter count unchanged
-        orig_params = sum(p.numel() for p in model.parameters())
-        quant_params = sum(p.numel() for p in quantized.parameters())
-        assert quant_params == orig_params
-
-    def test_qat_model_gradients_flow(self):
-        """Verify that gradients still flow through non-quantized forward pass."""
-        model = nn.Sequential(
-            nn.Linear(16, 8),
-            nn.ReLU(),
-            nn.Linear(8, 4),
-        )
-
-        x = torch.randn(4, 16, requires_grad=False)
-        target = torch.randn(4, 4)
-
-        output = model(x)
-        loss = nn.functional.mse_loss(output, target)
-        loss.backward()
-
-        assert model[0].weight.grad is not None
-        assert model[2].weight.grad is not None
-
-
-class TestFullKDPipeline:
-    """End-to-end KD pipeline: config -> compute loss -> backward."""
-
-    def test_full_kd_training_step(self):
-        from edgerazor import EdgeRazor
-
-        config = {
-            "method": "KD",
-            "loss_task_alpha": 1.0,
-            "loss_1": {
-                "loss_type": "logits",
-                "loss_function": "compute_kld_confidence",
-                "alpha": 0.5,
-                "temperature": 2.0,
-                "confidence_k": 5,
-            },
-        }
-        er = EdgeRazor(kd_config=config)
-
-        student_model = nn.Linear(16, 10)
-        teacher_model = nn.Linear(16, 10)
-        teacher_model.eval()
-
-        # Use 3D logits (batch, seq, vocab) which the KD functions expect
-        inputs = torch.randn(4, 8, 16)
-        labels = torch.randint(0, 10, (4, 8))
-
-        student_logits = student_model(inputs)
-        student_loss = nn.functional.cross_entropy(
-            student_logits.view(-1, 10), labels.view(-1)
-        )
-        student_outputs = {"loss": student_loss, "logits": student_logits}
-
+        # 6. Inference
+        new_q.eval()
         with torch.no_grad():
-            teacher_logits = teacher_model(inputs)
-        teacher_outputs = {"logits": teacher_logits}
+            test_input = torch.randint(0, 100, (2, 8))
+            out = new_q(test_input, return_dict=True)
+        assert out['logits'].shape == (2, 8, 100)
+        assert not torch.isnan(out['logits']).any()
+        assert not torch.isinf(out['logits']).any()
 
-        total_loss, loss_dict = er.compute_loss(
-            student_outputs, teacher_outputs, labels
+
+# ──────────────────────────────────────────────
+# E2E: QAT + KD (QAD)
+# ──────────────────────────────────────────────
+
+class TestE2EQAD:
+    def test_qad_full_lifecycle(self, temp_dir):
+        """Full QAD lifecycle: quantize → train with KD → replace → save → load → infer."""
+        er = EdgeRazor(
+            qat_config={
+                "method": "QAT",
+                "select": {
+                    "target_types": ["linear", "embedding"],
+                    "target_names": [],
+                    "exclude_types": [],
+                    "exclude_names": [],
+                },
+                "function": {
+                    "epsilon": 1e-5,
+                    "weight_function": "weight_quant_uniform_symmetric_clip_per_block_int1_58",
+                    "w_scale_factor": 2.0,
+                    "w_block_size": 64,
+                    "w_mixed_precision_prop": -1.0,
+                    "is_w_quantized": False,
+                    "activation_function": "",
+                    "a_block_size": -1,
+                    "a_mixed_precision_prop": -1.0,
+                    "kv_cache_function": "",
+                    "kv_block_size": -1,
+                    "kv_mixed_precision_prop": -1.0,
+                },
+                "training": "all",
+            },
+            kd_config={
+                "method": "KD",
+                "loss_task_alpha": 0.5,
+                "loss_1": {
+                    "loss_type": "logits",
+                    "loss_function": "compute_kld_reverse",
+                    "alpha": 0.5,
+                    "temperature": 2.0,
+                },
+            },
         )
 
-        assert loss_dict["distill_loss"] > 0
+        student = _E2EModel()
+        teacher = _E2EModel()
 
-        total_loss.backward()
-        assert student_model.weight.grad is not None
+        # 1. Quantize
+        q_student = er.quantize(student)
+        q_student.train()
+        assert isinstance(q_student.embed, QEmbedding)
 
-    def test_full_kd_with_multi_loss(self):
-        from edgerazor import EdgeRazor
+        # 2. Train with KD
+        optimizer = torch.optim.Adam(q_student.parameters(), lr=0.001)
+        pretrain_params = {n: p.clone() for n, p in q_student.named_parameters()}
 
-        config = {
-            "method": "KD",
-            "loss_1": {
-                "loss_type": "logits",
-                "loss_function": "compute_kld_confidence",
-                "alpha": 0.4,
-                "temperature": 2.0,
-                "confidence_k": 3,
-            },
-            "loss_2": {
-                "loss_type": "logits",
-                "loss_function": "compute_kld_confidence",
-                "alpha": 0.3,
-                "temperature": 1.0,
-                "confidence_k": 5,
-            },
-            "loss_3": {
-                "loss_type": "logits",
-                "loss_function": "compute_kld_confidence",
-                "alpha": 0.1,
-                "temperature": 1.0,
-                "confidence_k": 5,
-            },
-        }
-        er = EdgeRazor(kd_config=config)
+        losses = []
+        for _ in range(5):
+            optimizer.zero_grad()
+            inputs = torch.randint(0, 100, (4, 16))
+            student_out = q_student(inputs, labels=inputs, return_dict=True)
+            with torch.no_grad():
+                teacher_out = teacher(inputs, return_dict=True)
+            total_loss, loss_dict = er.compute_loss(student_out, teacher_out, inputs)
+            total_loss.backward()
+            optimizer.step()
+            losses.append(loss_dict['total_loss'])
 
-        student = {
-            "loss": torch.tensor(3.0, requires_grad=True),
-            "logits": torch.randn(2, 4, 10),
-        }
-        teacher = {"logits": torch.randn(2, 4, 10)}
-        labels = torch.randint(0, 10, (2, 4))
+        assert len(losses) == 5
+        for n, p in q_student.named_parameters():
+            assert not torch.equal(p, pretrain_params[n]), f"{n} did not train"
 
-        _, loss_dict = er.compute_loss(student, teacher, labels)
-        assert len(loss_dict["distill_loss_details"]) == 3
+        # 3. Replace
+        er.replace_quantized_weights(q_student)
 
-    def test_kd_task_loss_alpha_weighting(self):
-        from edgerazor import EdgeRazor
+        # 4. Save
+        save_path = temp_dir / "e2e_qad.pt"
+        torch.save(q_student.state_dict(), save_path)
 
-        config = {
-            "method": "KD",
-            "loss_task_alpha": 0.3,
-            "loss_1": {
-                "loss_type": "logits",
-                "loss_function": "compute_kld_forward",
-                "alpha": 0.5,
-                "temperature": 2.0,
-            },
-        }
-        er = EdgeRazor(kd_config=config)
+        # 5. Load
+        new_model = _E2EModel()
+        new_q = er.quantize(new_model)
+        new_q.load_state_dict(torch.load(save_path))
 
-        student = {
-            "loss": torch.tensor(10.0, requires_grad=True),
-            "logits": torch.randn(2, 4, 10),
-        }
-        teacher = {"logits": torch.randn(2, 4, 10)}
-        labels = torch.randint(0, 10, (2, 4))
-
-        total_loss, loss_dict = er.compute_loss(student, teacher, labels)
-        # total = 0.3 * 10.0 + distill_loss
-        expected = 0.3 * 10.0 + loss_dict["distill_loss"]
-        assert abs(total_loss.item() - expected) < 1e-4
+        # 6. Inference
+        new_q.eval()
+        with torch.no_grad():
+            out = new_q(torch.randint(0, 100, (2, 8)), return_dict=True)
+        assert out['logits'].shape == (2, 8, 100)
+        assert not torch.isnan(out['logits']).any()
 
 
-class TestFullQATKDPipeline:
-    """End-to-end combined QAT + KD training pipeline."""
+# ──────────────────────────────────────────────
+# E2E: JSON config save/load round-trip
+# ──────────────────────────────────────────────
 
-    def test_quantize_then_kd_with_synthetic_data(self):
-        from edgerazor import EdgeRazor
-        from edgerazor.qat.module import QLinear
-
-        model = nn.Sequential(
-            nn.Linear(32, 64),
-            nn.ReLU(),
-            nn.Linear(64, 10),
-        )
-
-        qat_config = {
+class TestE2EConfigRoundTrip:
+    def test_config_json_round_trip(self, temp_dir):
+        """Save config to JSON, load back, verify same behavior."""
+        original_config = {
             "method": "QAT",
             "select": {
                 "target_types": ["linear"],
@@ -275,11 +252,12 @@ class TestFullQATKDPipeline:
                 "exclude_names": [],
             },
             "function": {
+                "epsilon": 1e-5,
                 "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
                 "w_scale_factor": 2.0,
                 "w_block_size": 256,
                 "w_mixed_precision_prop": -1.0,
-                "is_w_quantized": True,
+                "is_w_quantized": False,
                 "activation_function": "",
                 "a_block_size": -1,
                 "a_mixed_precision_prop": -1.0,
@@ -290,77 +268,134 @@ class TestFullQATKDPipeline:
             "training": "all",
         }
 
-        kd_config = {
-            "method": "KD",
-            "loss_1": {
-                "loss_type": "logits",
-                "loss_function": "compute_kld_confidence",
-                "alpha": 0.5,
-                "temperature": 2.0,
-                "confidence_k": 5,
+        # Save
+        config_path = temp_dir / "config.json"
+        with open(config_path, 'w') as f:
+            json.dump(original_config, f)
+
+        # Load and apply
+        er = EdgeRazor(qat_config=str(config_path))
+        model = nn.Sequential(nn.Linear(16, 8))
+        q_model = er.quantize(model)
+        assert isinstance(q_model[0], QLinear)
+
+
+# ──────────────────────────────────────────────
+# E2E: Gradient through full QAD pipeline
+# ──────────────────────────────────────────────
+
+class TestE2EGradientFlow:
+    def test_all_parameters_receive_gradients_qad(self):
+        """Every parameter in the quantized model should get gradients."""
+        er = EdgeRazor(
+            qat_config={
+                "method": "QAT",
+                "select": {
+                    "target_types": ["linear", "embedding"],
+                    "target_names": [],
+                    "exclude_types": [],
+                    "exclude_names": [],
+                },
+                "function": {
+                    "epsilon": 1e-5,
+                    "weight_function": "weight_quant_uniform_symmetric_clip_per_block_int1_58",
+                    "w_scale_factor": 2.0,
+                    "w_block_size": 64,
+                    "w_mixed_precision_prop": -1.0,
+                    "is_w_quantized": False,
+                    "activation_function": "",
+                    "a_block_size": -1,
+                    "a_mixed_precision_prop": -1.0,
+                    "kv_cache_function": "",
+                    "kv_block_size": -1,
+                    "kv_mixed_precision_prop": -1.0,
+                },
+                "training": "all",
             },
-        }
-
-        er = EdgeRazor(qat_config=qat_config, kd_config=kd_config)
-
-        # Quantize student
-        quantized = er.quantize(model)
-        assert isinstance(quantized[0], QLinear)
-        assert isinstance(quantized[2], QLinear)
-
-        # Verify KD works on synthetic outputs
-        student_outputs = {
-            "loss": torch.tensor(3.5, requires_grad=True),
-            "logits": torch.randn(2, 4, 10),
-        }
-        teacher_outputs = {"logits": torch.randn(2, 4, 10)}
-        labels = torch.randint(0, 10, (2, 4))
-
-        total_loss, loss_dict = er.compute_loss(
-            student_outputs, teacher_outputs, labels
+            kd_config={
+                "method": "KD",
+                "loss_task_alpha": 0.5,
+                "loss_1": {
+                    "loss_type": "logits",
+                    "loss_function": "compute_kld_reverse",
+                    "alpha": 0.5,
+                    "temperature": 2.0,
+                },
+                "loss_2": {
+                    "loss_type": "hidden_states",
+                    "loss_function": "compute_mse",
+                    "alpha": 0.3,
+                    "layer_index": [0, 1],
+                },
+            },
         )
 
-        assert loss_dict["distill_loss"] > 0
-        assert "distill_loss_details" in loss_dict
+        student = _E2EModel()
+        teacher = _E2EModel()
+        q_student = er.quantize(student)
+        q_student.train()
 
+        inputs = torch.randint(0, 100, (4, 16))
+        student_out = q_student(inputs, labels=inputs, return_dict=True,
+                                output_hidden_states=True)
+        with torch.no_grad():
+            teacher_out = teacher(inputs, return_dict=True,
+                                  output_hidden_states=True)
+        total_loss, loss_dict = er.compute_loss(student_out, teacher_out, inputs)
         total_loss.backward()
 
+        grad_params = 0
+        zero_grad_params = 0
+        for name, p in q_student.named_parameters():
+            assert p.grad is not None, f"{name}: None gradient"
+            grad_params += 1
+            if p.grad.abs().sum() == 0:
+                zero_grad_params += 1
 
-class TestConfigFileLoading:
-    """End-to-end test for configuration file loading."""
+        assert grad_params > 0
+        # In a well-behaved model, most params should have non-zero gradients
+        assert zero_grad_params < grad_params, \
+            f"All {zero_grad_params}/{grad_params} params have zero gradients"
 
-    def test_load_qat_from_yaml_file(self, basic_qat_config_dict, temp_dir):
-        import yaml
-        from edgerazor.qat.util.quant_config import QuantConfig
 
-        yaml_path = temp_dir / "qat_config.yaml"
-        with open(yaml_path, "w") as f:
-            yaml.dump(basic_qat_config_dict, f)
+# ──────────────────────────────────────────────
+# E2E: Model output determinism
+# ──────────────────────────────────────────────
 
-        cfg = QuantConfig.from_yaml(yaml_path)
-        assert cfg.method == "QAT"
-        assert cfg.function.w_block_size == 256
+class TestE2EDeterminism:
+    def test_inference_deterministic(self):
+        """Quantized model should produce same output for same input."""
+        er = EdgeRazor(qat_config={
+            "method": "QAT",
+            "select": {
+                "target_types": ["linear", "embedding"],
+                "target_names": [],
+                "exclude_types": [],
+                "exclude_names": [],
+            },
+            "function": {
+                "epsilon": 1e-5,
+                "weight_function": "weight_quant_uniform_symmetric_absmax_per_block_int4",
+                "w_block_size": 256,
+                "w_mixed_precision_prop": -1.0,
+                "is_w_quantized": False,
+                "activation_function": "",
+                "a_block_size": -1,
+                "a_mixed_precision_prop": -1.0,
+                "kv_cache_function": "",
+                "kv_block_size": -1,
+                "kv_mixed_precision_prop": -1.0,
+            },
+            "training": "all",
+        })
 
-    def test_load_kd_from_yaml_file(self, basic_kd_config_dict, temp_dir):
-        import yaml
-        from edgerazor.kd.util.distill_config import DistillConfig
+        model = _E2EModel()
+        q_model = er.quantize(model)
+        q_model.eval()
 
-        yaml_path = temp_dir / "kd_config.yaml"
-        with open(yaml_path, "w") as f:
-            yaml.dump(basic_kd_config_dict, f)
-
-        cfg = DistillConfig.from_yaml(yaml_path)
-        assert cfg.method == "KD"
-        assert "loss_1" in cfg.losses
-
-    def test_load_unified_from_yaml_file(self, unified_config_dict, temp_dir):
-        import yaml
-        from edgerazor.edgerazor_config import EdgeRazorConfig
-
-        yaml_path = temp_dir / "unified_config.yaml"
-        with open(yaml_path, "w") as f:
-            yaml.dump(unified_config_dict, f)
-
-        cfg = EdgeRazorConfig.from_yaml(yaml_path=yaml_path)
-        assert cfg.has_qat is True
-        assert cfg.has_kd is True
+        torch.manual_seed(42)
+        inputs = torch.randint(0, 100, (2, 8))
+        with torch.no_grad():
+            out1 = q_model(inputs, return_dict=True)['logits']
+            out2 = q_model(inputs, return_dict=True)['logits']
+        torch.testing.assert_close(out1, out2)
