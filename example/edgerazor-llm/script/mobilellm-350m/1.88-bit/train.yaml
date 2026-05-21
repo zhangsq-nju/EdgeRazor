@@ -5,7 +5,7 @@ qat_configuration:
     target_types:
     - linear
     - embedding
-    - kv_cache
+    - llamaattention
     target_names: []
     exclude_types: []
     exclude_names: []
