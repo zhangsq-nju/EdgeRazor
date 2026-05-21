@@ -134,6 +134,9 @@ class SelectConfig:
     # Module names to exclude
     exclude_names: set[str] = field(default_factory=set)
 
+    # Whether to quantize KV cache (meta-target, not a real nn.Module type)
+    kv_cache: bool = False
+
 
 @dataclass
 class OverrideConfig:
@@ -243,9 +246,14 @@ class QuantConfig:
         select_dict = config_dict.get("select", {})
 
         # Parse target_types (supports regex patterns like "conv.*", ".*", etc.)
+        # Special handling for "kv_cache" — meta-target for KV cache quantization
         target_types_list = select_dict.get("target_types", [])
         target_types_set = set()
+        has_kv_cache = False
         for module_name in target_types_list:
+            if module_name == "kv_cache":
+                has_kv_cache = True
+                continue
             if module_name in modules_map:
                 # Exact match
                 target_types_set.add(modules_map[module_name])
@@ -272,6 +280,9 @@ class QuantConfig:
         exclude_types_list = select_dict.get("exclude_types", [])
         exclude_types_set = set()
         for module_name in exclude_types_list:
+            if module_name == "kv_cache":
+                has_kv_cache = False
+                continue
             if module_name in modules_map:
                 # Exact match
                 exclude_types_set.add(modules_map[module_name])
@@ -298,7 +309,8 @@ class QuantConfig:
             target_types=target_types_set,
             target_names=set(select_dict.get("target_names", [])),
             exclude_types=exclude_types_set,
-            exclude_names=set(select_dict.get("exclude_names", []))
+            exclude_names=set(select_dict.get("exclude_names", [])),
+            kv_cache=has_kv_cache,
         )
 
         self.training = config_dict.get("training", "all")
@@ -585,6 +597,10 @@ class QuantConfig:
             name = _modules_map_reverse.get(module_type)
             if name is not None:
                 target_types_list.append(name)
+
+        # Add kv_cache meta-target if enabled
+        if self.select.kv_cache:
+            target_types_list.append("kv_cache")
 
         exclude_types_list = []
         for module_type in self.select.exclude_types:

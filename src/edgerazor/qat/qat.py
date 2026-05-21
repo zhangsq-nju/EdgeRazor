@@ -4,16 +4,7 @@ import torch.nn as nn
 from transformers import PreTrainedModel
 
 from ..log import get_logger
-from .block import (
-    QKVCacheLlamaAttention,
-    QKVCacheOlmoeAttention,
-    QKVCacheOlmoeFlashAttention2,
-    QKVCacheOlmoeSdpaAttention,
-    QKVCacheQwen2_5OmniAttention,
-    QKVCacheQwen3Attention,
-    QKVCacheQwen3MoeAttention,
-    QMultiheadAttention,
-)
+from .block import QMultiheadAttention
 from .module import QConv1d, QConv2d, QConv3d, QEmbedding, QLinear
 from .quantize import apply_quantization, replace_applied_quantized_weights
 from .util import QuantConfig, QuantSelector
@@ -42,14 +33,6 @@ class QAT:
         ('qconv2d_cls',                        'Conv2d',                QConv2d),
         ('qconv3d_cls',                        'Conv3d',                QConv3d),
         ('qmultiheadattention_cls',            'MultiheadAttention',    QMultiheadAttention),
-        # Subclass checks before parent OlmoeAttention
-        ('qkvcacheolmoeflashattention2_cls',   'OlmoeFlashAttention2',  QKVCacheOlmoeFlashAttention2),
-        ('qkvcacheolmoesdpaattention_cls',     'OlmoeSdpaAttention',    QKVCacheOlmoeSdpaAttention),
-        ('qkvcacheolmoeattention_cls',         'OlmoeAttention',        QKVCacheOlmoeAttention),
-        ('qkvcacheqwen2_5omniattention_cls',   'Qwen2_5OmniAttention',  QKVCacheQwen2_5OmniAttention),
-        ('qkvcacheqwen3attention_cls',         'Qwen3Attention',        QKVCacheQwen3Attention),
-        ('qkvcacheqwen3moeattention_cls',      'Qwen3MoeAttention',     QKVCacheQwen3MoeAttention),
-        ('qkvcachellamaattention_cls',         'LlamaAttention',        QKVCacheLlamaAttention),
     ]
 
     def __init__(self, config: dict | str | Path | QuantConfig):
@@ -229,17 +212,10 @@ class QAT:
         qconv2d_cls: nn.Module = None,
         qconv3d_cls: nn.Module = None,
         qmultiheadattention_cls: nn.Module = None,
-        qkvcacheolmoeattention_cls: nn.Module = None,
-        qkvcacheolmoeflashattention2_cls: nn.Module = None,
-        qkvcacheolmoesdpaattention_cls: nn.Module = None,
-        qkvcacheqwen2_5omniattention_cls: nn.Module = None,
-        qkvcacheqwen3attention_cls: nn.Module = None,
-        qkvcacheqwen3moeattention_cls: nn.Module = None,
-        qkvcachellamaattention_cls: nn.Module = None,
     ) -> nn.Module:
         """
         Apply quantization to the model.
-        
+
         Args:
             model: PyTorch model to quantize
             qlinear_cls: Custom quantized Linear class (default: QLinear)
@@ -248,14 +224,7 @@ class QAT:
             qconv2d_cls: Custom quantized Conv2d class (default: QConv2d)
             qconv3d_cls: Custom quantized Conv3d class (default: QConv3d)
             qmultiheadattention_cls: Custom quantized MultiheadAttention class (default: QMultiheadAttention)
-            qkvcacheolmoeattention_cls: Custom quantized QKVCacheOlmoeAttention class (default: QKVCacheOlmoeAttention)
-            qkvcacheolmoeflashattention2_cls: Custom quantized QKVCacheOlmoeFlashAttention2 class (default: QKVCacheOlmoeFlashAttention2)
-            qkvcacheolmoesdpaattention_cls: Custom quantized QKVCacheOlmoeSdpaAttention class (default: QKVCacheOlmoeSdpaAttention)
-            qkvcacheqwen2_5omniattention_cls: Custom quantized QKVCacheQwen2_5OmniAttention class (default: QKVCacheQwen2_5OmniAttention)
-            qkvcacheqwen3attention_cls: Custom quantized QKVCacheQwen3Attention class (default: QKVCacheQwen3Attention)
-            qkvcacheqwen3moeattention_cls: Custom quantized QKVCacheQwen3MoeAttention class (default: QKVCacheQwen3MoeAttention)
-            qkvcachellamaattention_cls: Custom quantized QKVCacheLlamaAttention class (default: QKVCacheLlamaAttention)
-            
+
         Returns:
             Quantized model
         """
@@ -304,13 +273,6 @@ class QAT:
             qconv2d_cls=qconv2d_cls,
             qconv3d_cls=qconv3d_cls,
             qmultiheadattention_cls=qmultiheadattention_cls,
-            qkvcacheolmoeattention_cls=qkvcacheolmoeattention_cls,
-            qkvcacheolmoeflashattention2_cls=qkvcacheolmoeflashattention2_cls,
-            qkvcacheolmoesdpaattention_cls=qkvcacheolmoesdpaattention_cls,
-            qkvcacheqwen2_5omniattention_cls=qkvcacheqwen2_5omniattention_cls,
-            qkvcacheqwen3attention_cls=qkvcacheqwen3attention_cls,
-            qkvcacheqwen3moeattention_cls=qkvcacheqwen3moeattention_cls,
-            qkvcachellamaattention_cls=qkvcachellamaattention_cls,
         )
 
         self.logger.info("Applying quantization to selected modules...")
@@ -361,7 +323,6 @@ class QAT:
 
         # Calculate quantized parameters using weight object ID deduplication
         # This prevents double-counting shared weights (e.g., tied embeddings)
-        # qkvcache_xxxxxx_cls is state quantization only, so we do not count its parameters (weights) here
         _weight_qclass_keys = (
             'qlinear_cls', 'qembedding_cls', 'qconv1d_cls', 'qconv2d_cls',
             'qconv3d_cls', 'qmultiheadattention_cls',

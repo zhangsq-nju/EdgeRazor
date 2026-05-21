@@ -44,9 +44,11 @@ class TestModulesMap:
         assert modules_map["conv2d"] == nn.Conv2d
         assert modules_map["conv3d"] == nn.Conv3d
 
-    def test_attention_modules_present(self):
-        assert "llamaattention" in modules_map
-        assert "qwen3attention" in modules_map
+    def test_no_legacy_attention_types(self):
+        assert "llamaattention" not in modules_map
+        assert "qwen3attention" not in modules_map
+        assert "qwen2_5omniattention" not in modules_map
+        assert "olmoeattention" not in modules_map
 
 
 class TestQuantConfigMap:
@@ -78,7 +80,7 @@ class TestConfigBuilders:
     def test_create_w1_58_config_with_activation_kv(self):
         config = create_w1_58_config(with_activation_kv=True)
         targets = config["select"]["target_types"]
-        assert "qwen3attention" in targets
+        assert "kv_cache" in targets
         func = config["function"]
         assert func["activation_function"] != ""
         assert func["kv_cache_function"] != ""

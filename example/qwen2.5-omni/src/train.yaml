@@ -4,7 +4,7 @@ qat_configuration:
     target_types:
     - linear
     - embedding
-    - qwen2_5omniattention
+    - kv_cache
     target_names: []
     exclude_types: []
     exclude_names: [
