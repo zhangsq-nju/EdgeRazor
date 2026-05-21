@@ -45,10 +45,16 @@ class TestModulesMap:
         assert modules_map["conv3d"] == nn.Conv3d
 
     def test_no_legacy_attention_types(self):
-        assert "llamaattention" not in modules_map
-        assert "qwen3attention" not in modules_map
-        assert "qwen2_5omniattention" not in modules_map
-        assert "olmoeattention" not in modules_map
+        for legacy_name in (
+            "llamaattention",
+            "qwen3attention",
+            "qwen3moeattention",
+            "qwen2_5omniattention",
+            "olmoeattention",
+            "olmoesdpaattention",
+            "olmoeflashattention2",
+        ):
+            assert legacy_name not in modules_map, f"legacy type {legacy_name} should not be in modules_map"
 
 
 class TestQuantConfigMap:
