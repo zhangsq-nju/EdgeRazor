@@ -80,8 +80,14 @@ class QuantizedKVState:
 
 def create_quantized_kv_cache(
     config: QuantConfig,
+    model_config=None,
 ) -> QuantizedKVState | None:
     """Create a QuantizedKVState from a QuantConfig if KV cache quant is configured.
+
+    Args:
+        config: QuantConfig with kv_cache_function settings.
+        model_config: Optional PretrainedConfig for DynamicCache so sliding-window
+            and hybrid layers are handled correctly. Pass the model's config here.
 
     Returns None if kv_cache_function is not set.
     """
@@ -106,7 +112,7 @@ def create_quantized_kv_cache(
         kv_kwargs['mixed_precision_prop'] = config.function.kv_mixed_precision_prop
 
     return QuantizedKVState(
-        cache=DynamicCache(),
+        cache=DynamicCache(config=model_config),
         quant_fn=kv_cache_function,
         kv_kwargs=kv_kwargs,
     )

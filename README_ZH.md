@@ -96,14 +96,32 @@ pip install -e .
 
 2. 将 EdgeRazor 无缝接入您的全精度模型训练流程，即刻开启轻量化之旅！
 
+3. 以下是 LLM 的高层与低层 API 使用示例
+
 ```python
-# 初始化 EdgeRazor 以构建轻量化模型
-edgerazor = EdgeRazor(config="/path/to/config.yaml")
+# 高层 API 使用
+trainer = EdgeRazorCausalLMTrainer(
+  model=student,
+  args=TrainingArguments(...),
+  train_dataset=train_dataset,
+  data_collator=data_collator,
+  processing_class=tokenizer,
+  teacher_model=teacher,
+  edgerazor_config="/path/to/w1.58-a8-kv8.yaml",
+)
+trainer.train()
+trainer.model.save_pretrained("/path/to/qmodel")
+tokenizer.save_pretrained("/path/to/qmodel")
+```
+
+```python
+# 底层 API 使用
+edgerazor = EdgeRazor(config="/path/to/w1.58-a8-kv8.yaml")
 student = edgerazor.quantize(student)
-# 训练循环
-student_outputs = student(inputs)
-teacher_outputs = teacher(inputs)
-# 计算损失
+kv_cache_quant = edgerazor.create_kv_cache(model_config=student.config)
+# 训练循环：
+student_outputs = student(**inputs, kv_cache_quant)
+teacher_outputs = teacher(**inputs)
 loss, loss_dict = edgerazor.compute_loss(student_outputs, teacher_outputs, labels)
 ```
 

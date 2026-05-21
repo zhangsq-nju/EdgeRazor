@@ -4,7 +4,7 @@ import torch.nn as nn
 from transformers import PreTrainedModel
 
 from ..log import get_logger
-from .block import QMultiheadAttention
+from .block import QMultiheadAttention, create_quantized_kv_cache
 from .module import QConv1d, QConv2d, QConv3d, QEmbedding, QLinear
 from .quantize import apply_quantization, replace_applied_quantized_weights
 from .util import QuantConfig, QuantSelector
@@ -398,3 +398,18 @@ class QAT:
         self.logger.debug("=" * 80)
 
         return updated_model
+
+    def create_kv_cache(self, model_config=None):
+        """Create a QuantizedKVState for KV cache quantization if configured.
+
+        Returns None when kv_cache is not enabled in the select configuration.
+        The returned cache wraps a fresh DynamicCache and must be passed as
+        ``past_key_values`` to the model's forward call.
+
+        Args:
+            model_config: Optional PretrainedConfig for DynamicCache so
+                sliding-window and hybrid layers are handled correctly.
+        """
+        if not self.selector.has_kv_cache:
+            return None
+        return create_quantized_kv_cache(self.config, model_config=model_config)
