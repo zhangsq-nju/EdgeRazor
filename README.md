@@ -112,8 +112,6 @@ trainer = EdgeRazorCausalLMTrainer(
   edgerazor_config="/path/to/w1.58-a8-kv8.yaml",
 )
 trainer.train()
-trainer.model.save_pretrained("/path/to/qmodel")
-tokenizer.save_pretrained("/path/to/qmodel")
 ```
 
 ```python
