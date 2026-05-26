@@ -195,6 +195,8 @@ class EdgeRazorCausalLMTrainer(Trainer):
         self.router_aux_loss_coef = router_aux_loss_coef
         self.router_z_loss_coef = router_z_loss_coef
         self.custom_losses: dict[str, float] = {}
+        self.custom_losses_eval: dict[str, float] = {}
+        self._eval_batch_count: int = 0
 
     # ------------------------------------------------------------------
     # Loss computation
@@ -202,36 +204,22 @@ class EdgeRazorCausalLMTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         student_device = next(model.parameters()).device
-
-        # Move inputs to student device once
         inputs = {k: v.to(student_device) for k, v in inputs.items()}
         labels = inputs["labels"]
-
         _is_training = model.training
 
         # --- student forward ---
         forward_kwargs: dict = {
             "return_dict": True,
-            "output_hidden_states": _is_training and self._kd_needs_hidden_states,
-            "output_attentions": _is_training and self._kd_needs_attentions,
+            "output_hidden_states": self._kd_needs_hidden_states,
+            "output_attentions": self._kd_needs_attentions,
             "output_router_logits": True,
         }
         if self._kv_cache_enabled:
             forward_kwargs['past_key_values'] = self.edgerazor.create_kv_cache(
                 model_config=self._model_config,
             )
-
         student_outputs = model(**inputs, **forward_kwargs)
-
-        # --- eval: skip teacher forward and KD, return task loss only ---
-        if not _is_training:
-            loss_total = student_outputs.loss
-            self.custom_losses = {
-                "train/loss_total": self._to_item(loss_total),
-                "train/loss_task": self._to_item(loss_total),
-                "train/loss_dist": 0.0,
-            }
-            return (loss_total, student_outputs) if return_outputs else loss_total
 
         # --- teacher forward (no grad) ---
         if self.teacher_model is not None:
@@ -266,8 +254,11 @@ class EdgeRazorCausalLMTrainer(Trainer):
         for v in moe_losses.values():
             loss_total = loss_total + v
 
-        # --- populate metrics ---
-        self._track_losses(loss_total, loss_task, loss_dist, loss_dict, moe_losses)
+        # --- track metrics ---
+        if _is_training:
+            self._track_losses(loss_total, loss_task, loss_dist, loss_dict, moe_losses)
+        else:
+            self._track_losses_eval(loss_total, loss_task, loss_dist, loss_dict, moe_losses)
 
         return (loss_total, student_outputs) if return_outputs else loss_total
 
@@ -331,6 +322,29 @@ class EdgeRazorCausalLMTrainer(Trainer):
         for name, value in moe_losses.items():
             self.custom_losses[f"train/{name}"] = self._to_item(value)
 
+    def _track_losses_eval(
+        self,
+        loss_total,
+        loss_task,
+        loss_dist,
+        loss_dict: dict,
+        moe_losses: dict[str, torch.Tensor],
+    ) -> None:
+        """Accumulate eval losses across batches into ``self.custom_losses_eval``."""
+        losses = {
+            "eval/loss_total": self._to_item(loss_total),
+            "eval/loss_task": self._to_item(loss_task),
+            "eval/loss_dist": self._to_item(loss_dist),
+        }
+        for key, value in loss_dict.get("distill_loss_details", {}).items():
+            ind = key.removeprefix("loss_")
+            losses[f"eval/loss_dist_{ind}"] = self._to_item(value)
+        for name, value in moe_losses.items():
+            losses[f"eval/{name}"] = self._to_item(value)
+        for k, v in losses.items():
+            self.custom_losses_eval[k] = self.custom_losses_eval.get(k, 0.0) + v
+        self._eval_batch_count += 1
+
     # ------------------------------------------------------------------
     # Logging hook
     # ------------------------------------------------------------------
@@ -338,5 +352,12 @@ class EdgeRazorCausalLMTrainer(Trainer):
     def log(
         self, logs: dict[str, float], start_time: Optional[float] = None
     ) -> None:
-        logs.update(self.custom_losses)
+        if self._eval_batch_count > 0:
+            n = self._eval_batch_count
+            for k, v in self.custom_losses_eval.items():
+                logs[k] = v / n
+            self.custom_losses_eval.clear()
+            self._eval_batch_count = 0
+        else:
+            logs.update(self.custom_losses)
         super().log(logs, start_time)
