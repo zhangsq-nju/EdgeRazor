@@ -6,7 +6,7 @@ Homepage = "https://github.com/zhangsq-nju/EdgeRazor"
 
 [project]
 name = "edgerazor"
-version = "1.3.3"
+version = "1.3.4"
 description = "EdgeRazor: Lightweight framework for Edge AI."
 readme = "README.md"
 requires-python = ">=3.10.20"
