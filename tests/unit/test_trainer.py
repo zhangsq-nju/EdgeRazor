@@ -501,7 +501,7 @@ class TestMoEAuxLossWarning:
 
 class TestEvalModeShortcut:
     @patch("transformers.Trainer.__init__", return_value=None)
-    def test_eval_mode_skips_teacher_and_kd(self, mock_super, basic_kd_config_dict):
+    def test_eval_mode_runs_kd(self, mock_super, basic_kd_config_dict):
         from edgerazor import EdgeRazor, EdgeRazorCausalLMTrainer
 
         er = EdgeRazor(kd_config=basic_kd_config_dict)
@@ -533,10 +533,10 @@ class TestEvalModeShortcut:
 
         loss = trainer.compute_loss(model, inputs, return_outputs=False)
 
-        assert not teacher_forward_called
-        assert loss.item() == pytest.approx(3.5)
-        assert trainer.custom_losses["train/loss_task"] == 3.5
-        assert trainer.custom_losses["train/loss_dist"] == 0.0
+        assert teacher_forward_called
+        assert loss.item() > 3.5  # KD adds distill loss on top of task loss
+        assert "eval/loss_task" in trainer.custom_losses_eval
+        assert trainer.custom_losses_eval["eval/loss_dist"] > 0
 
     @patch("transformers.Trainer.__init__", return_value=None)
     def test_eval_mode_return_outputs(self, mock_super, basic_qat_config_dict):
@@ -603,9 +603,9 @@ class TestEvalModeShortcut:
 
         loss = trainer.compute_loss(model, inputs, return_outputs=False)
         assert loss.item() == pytest.approx(4.0)
-        assert trainer.custom_losses["train/loss_total"] == 4.0
-        assert trainer.custom_losses["train/loss_task"] == 4.0
-        assert trainer.custom_losses["train/loss_dist"] == 0.0
+        assert trainer.custom_losses_eval["eval/loss_total"] == 4.0
+        assert trainer.custom_losses_eval["eval/loss_task"] == 4.0
+        assert trainer.custom_losses_eval["eval/loss_dist"] == 0.0
 
 
 # ---------------------------------------------------------------------------

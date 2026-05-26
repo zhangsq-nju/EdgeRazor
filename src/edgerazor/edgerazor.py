@@ -118,13 +118,26 @@ class EdgeRazor:
         """
         Replace model weights with quantized versions (if QAT enabled).
 
+        After replacement, ``model.config.is_w_quantized`` is set to True
+        so downstream tools (export, inference loader) can detect pre-quantized
+        weights without re-quantizing.
+
         Args:
             model: PyTorch model
 
         Returns:
             Model with quantized weights (if QAT enabled), otherwise unchanged
         """
-        self.model = self.qat.replace_quantized_weights(model) if self.qat else model
+        if self.qat:
+            self.model = self.qat.replace_quantized_weights(model)
+            # Mark the model config so the inference loader knows weights are
+            # already quantized and only need dequant/replacement, not STE training.
+            cfg = getattr(self.model, 'config', None)
+            if cfg is not None and hasattr(cfg, 'is_w_quantized'):
+                cfg.is_w_quantized = True
+                self.logger.debug("Set model.config.is_w_quantized = True")
+        else:
+            self.model = model
         return self.model
 
     def create_kv_cache(self, model_config=None):

@@ -210,6 +210,53 @@ class EdgeRazorConfig:
         raise ValueError("No configuration provided")
     
     @classmethod
+    def from_quant_mode(
+        cls,
+        quant_mode: str,
+        is_w_quantized: bool = True,
+        log_level: str | int = logging.INFO,
+    ) -> "EdgeRazorConfig":
+        """Create EdgeRazorConfig from a quant_mode preset string.
+
+        This is the recommended way to create an inference config from the
+        ``edgerazor_qconfig`` field in a model's ``config.json``.
+
+        Args:
+            quant_mode: Preset name, e.g. ``"w1_58a8kv8_embint4"``.
+            is_w_quantized: Whether weights in the checkpoint are already
+                quantized. Default True for inference.
+            log_level: Logging level.
+
+        Returns:
+            EdgeRazorConfig with QAT enabled.
+
+        Raises:
+            ValueError: If ``quant_mode`` is unknown.
+        """
+        from copy import deepcopy
+
+        from .qat.map import _LEGACY_ALIASES, quant_config_map
+
+        # Resolve legacy alias first
+        resolved = _LEGACY_ALIASES.get(quant_mode, quant_mode)
+
+        if resolved not in quant_config_map:
+            available = [k for k in quant_config_map if not k.startswith('_')]
+            raise ValueError(
+                f"Unknown quant_mode: '{quant_mode}'"
+                + (f" (resolved to '{resolved}')" if resolved != quant_mode else "")
+                + f". Available: {available}"
+            )
+
+        config_dict = deepcopy(quant_config_map[resolved])
+        config_dict["function"]["is_w_quantized"] = is_w_quantized
+
+        # Build a QAT-only EdgeRazorConfig
+        qat_config = QuantConfig(config_dict)
+        instance = cls(qat_config=qat_config, log_level=log_level)
+        return instance
+
+    @classmethod
     def from_dict(cls, config_dict: dict[str, Any]) -> "EdgeRazorConfig":
         """
         Create EdgeRazorConfig from a dictionary.

@@ -3,8 +3,7 @@
 import torch.nn as nn
 
 from edgerazor.qat.map import (
-    create_w1_58_config,
-    create_w1_58_config_embint4,
+    create_quant_config,
     modules_map,
     quant_config_map,
     quant_function_map,
@@ -77,22 +76,25 @@ class TestQuantConfigMap:
 
 
 class TestConfigBuilders:
-    def test_create_w1_58_config_basic(self):
-        config = create_w1_58_config()
+    def test_create_quant_config_default(self):
+        config = create_quant_config()
         assert config["method"] == "QAT"
         assert "linear" in config["select"]["target_types"]
         assert "embedding" in config["select"]["target_types"]
 
-    def test_create_w1_58_config_with_activation_kv(self):
-        config = create_w1_58_config(with_activation_kv=True)
+    def test_create_quant_config_with_activation_kv(self):
+        config = create_quant_config(with_activation_kv=True)
         targets = config["select"]["target_types"]
         assert "kv_cache" in targets
         func = config["function"]
         assert func["activation_function"] != ""
         assert func["kv_cache_function"] != ""
 
-    def test_create_w1_58_config_embint4_basic(self):
-        config = create_w1_58_config_embint4()
+    def test_create_quant_config_embint4(self):
+        config = create_quant_config(overrides=[
+            {"name": ".*embed_tokens", "weight_function": "w4", "w_scale_factor": -1},
+            {"name": ".*lm_head", "weight_function": "w4", "w_scale_factor": -1},
+        ])
         assert config["method"] == "QAT"
         assert "overrides" in config
         overrides = config["overrides"]
@@ -101,12 +103,21 @@ class TestConfigBuilders:
         assert any("embed_tokens" in n for n in name_patterns)
         assert any("lm_head" in n for n in name_patterns)
 
-    def test_create_w1_58_config_embint4_with_custom_mp_prop(self):
-        config = create_w1_58_config_embint4(mp_prop=0.25)
+    def test_create_quant_config_custom_mp_prop(self):
+        config = create_quant_config(mp_prop=0.25)
         assert config["function"]["w_mixed_precision_prop"] == 0.25
 
-    def test_create_w1_58_config_embint4_with_kv(self):
-        config = create_w1_58_config_embint4(with_activation_kv=True)
-        func = config["function"]
-        assert func["activation_function"] != ""
-        assert func["kv_cache_function"] != ""
+    def test_create_quant_config_auto_w_func(self):
+        c1 = create_quant_config(mp_prop=0)
+        assert c1["function"]["weight_function"] == "weight_quant_uniform_symmetric_clip_per_block_int1_58"
+
+        c2 = create_quant_config(mp_prop=0.125)
+        assert c2["function"]["weight_function"] == "weight_quant_uniform_symmetric_clip_per_block_mp_int1_58_int4_static_row_wise_sparse"
+
+    def test_create_quant_config_explicit_w_func(self):
+        config = create_quant_config(w_func="weight_quant_uniform_symmetric_absmax_per_block_int4")
+        assert config["function"]["weight_function"] == "weight_quant_uniform_symmetric_absmax_per_block_int4"
+
+    def test_create_quant_config_omit_w_scale_factor(self):
+        config = create_quant_config(with_activation_kv=True)
+        assert "w_scale_factor" not in config["function"]
