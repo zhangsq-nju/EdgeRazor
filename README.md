@@ -150,11 +150,11 @@ python app.py
 
 ## Main Techniques
 
-Quantization-Aware Distillation (QAD): 
+Mixed-Precision Quantization-Aware Distillation (MPQAD): 
 
-- Configurable mixed-precision quantization for weights
-- Configurable knowledge distillation pipelines between 16-bit and $n$-bit models
-- Knowledge distillation methods: Adaptive Feature Distillation (AFD), Entropy-Aware KL Divergence (EAKLD)
+- Configurable training pipelines between 16-bit and $n$-bit models
+- Configurable quantization for weights: Structural Quantization with Mixed Precision (SQMP)
+- Configurable distillation methods: Layer-Adaptive Feature Distillation (LAFD), Entropy-Aware KL Divergence (EAKLD)
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/zhangsq-nju/EdgeRazor/main/asset/EdgeRazor-Framework.png" alt="EdgeRazor Framework Overview" width="75%">

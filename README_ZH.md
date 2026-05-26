@@ -148,12 +148,12 @@ python app.py
 
 ## 主要技术
 
-量化感知蒸馏 (Quantization-Aware Distillation, QAD)：
+混合精度量化感知蒸馏 (Mixed-Precision Quantization-Aware Distillation, MPQAD)：
 
-- 针对模型权重：可配置的矩阵维度的混合精度量化训练
-- 蒸馏训练过程：可配置的从 16-bit 到 $n$-bit 模型的蒸馏
+- 整体训练过程：可配置的从 16-bit 到 $n$-bit 模型的蒸馏
+- 针对模型权重：可配置的矩阵维度的混合精度量化训练，通过混合精度的结构量化 (Structural Quantization with Mixed-Precision, SQMP)
 - 蒸馏训练方法：
-  - 自适应的特征蒸馏 (Adaptive Feature Distillation, AFD)
+  - 层自适应的特征蒸馏 (Layer-Adaptive Feature Distillation, LAFD)
   - 熵感知的 KL 散度 (Entropy-Aware KL Divergence, EAKLD)
 
 <p align="center">
