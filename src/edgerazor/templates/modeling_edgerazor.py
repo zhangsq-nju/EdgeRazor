@@ -30,6 +30,10 @@ class EdgeRazorForCausalLM:
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
+        # Pop trust_remote_code — the user passed it to enable auto_map, but
+        # all internal calls use trust_remote_code=False to avoid recursion.
+        kwargs.pop('trust_remote_code', None)
+
         # --- resolve EdgeRazor config from config.json ---
         config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path, trust_remote_code=False
@@ -45,12 +49,16 @@ class EdgeRazorForCausalLM:
         )
 
         # --- apply EdgeRazor quantization ---
+        # quantize() replaces nn.Linear → QLinear (structure swap).
+        # replace_quantized_weights is NOT called here — it is a training /
+        # export step that bakes quantization into weights. During inference
+        # loading, QLinear handles both cases automatically:
+        #   is_w_quantized=True  → w_quant = W       (identity, pre-quantized)
+        #   is_w_quantized=False → w_quant = quant(W) (on-the-fly)
         if edgerazor_cfg:
             from edgerazor import EdgeRazor
             er = EdgeRazor(config=edgerazor_cfg)
             er.quantize(model)
-            if getattr(config, 'is_w_quantized', False):
-                er.replace_quantized_weights(model)
             _inject_kv_cache(model, er)
 
         return model

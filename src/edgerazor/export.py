@@ -20,7 +20,6 @@ The tool generates:
 - ``model.safetensors`` — quantized weights (copied / symlinked)
 - ``tokenizer.json``, ``tokenizer_config.json``, ``special_tokens_map.json``
 """
-from __future__ import annotations
 
 import argparse
 import json
