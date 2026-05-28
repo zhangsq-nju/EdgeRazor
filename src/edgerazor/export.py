@@ -46,6 +46,30 @@ def _copy_template(target_dir: Path, filename: str, overwrite: bool = False) -> 
     return dst
 
 
+def _resolve_quant_bits(quant_mode: str) -> tuple[int, int, int]:
+    """Resolve weight / activation / KV cache bits from quant mode name.
+
+    Returns (weight_bits, activation_bits, kv_cache_bits).
+    """
+    mode = quant_mode.lower()
+    # Defaults
+    w_bits, a_bits, kv_bits = 4, 0, 0
+
+    if "w1_58" in mode or "w1.58" in mode:
+        w_bits = 4  # 1.58-bit degraded to 4-bit packing
+    elif "w4" in mode:
+        w_bits = 4
+    elif "w2" in mode:
+        w_bits = 4  # degrade to 4-bit
+
+    if "a8" in mode:
+        a_bits = 8
+    if "kv8" in mode:
+        kv_bits = 8
+
+    return w_bits, a_bits, kv_bits
+
+
 def _patch_config_json(
     target_dir: Path,
     quant_mode: str,
@@ -53,7 +77,11 @@ def _patch_config_json(
     auto_map_key: str = "AutoModelForCausalLM",
     auto_map_value: str = "modeling_edgerazor.EdgeRazorForCausalLM",
 ) -> None:
-    """Read config.json, add EdgeRazor fields, write back."""
+    """Read config.json, add EdgeRazor fields, write back.
+
+    Also adds a ``quantization_config`` key so vLLM can auto-detect the
+    EdgeRazor quantization method without requiring ``--quantization edgerazor``.
+    """
     config_path = target_dir / "config.json"
     if not config_path.exists():
         print(f"  Warning: config.json not found at {config_path}")
@@ -71,9 +99,20 @@ def _patch_config_json(
     cfg['edgerazor_qconfig'] = quant_mode
     cfg['is_w_quantized'] = is_w_quantized
 
+    # Add quantization_config for vLLM auto-detection
+    w_bits, a_bits, kv_bits = _resolve_quant_bits(quant_mode)
+    cfg['quantization_config'] = {
+        "quant_method": "edgerazor",
+        "quant_mode": quant_mode,
+        "weight_bits": w_bits,
+        "activation_bits": a_bits,
+        "kv_cache_bits": kv_bits,
+    }
+
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    print(f"  Patched config.json (edgerazor_qconfig={quant_mode})")
+    print(f"  Patched config.json (edgerazor_qconfig={quant_mode}, "
+          f"quantization_config=edgerazor)")
 
 
 def _copy_safetensors(src: Path, dst: Path) -> None:

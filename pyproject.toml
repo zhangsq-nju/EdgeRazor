@@ -104,6 +104,15 @@ test = [
     "pytest-cov>=4.0",
     "pytest-mock>=3.10",
 ]
+vllm = [
+    "vllm>=0.10.0",
+]
+
+# vLLM auto-discovers the edgerazor quantization method via this entry point.
+# When vLLM starts, it calls edgerazor.vllm:register() which imports the
+# quant module, triggering @register_quantization_config("edgerazor").
+[project.entry-points."vllm.general_plugins"]
+edgerazor = "edgerazor.vllm:register"
 
 # ============================================================================
 # Pytest Configuration
