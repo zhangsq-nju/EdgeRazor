@@ -17,17 +17,25 @@ Additions to ``config.json``:
 
 Usage::
 
-    # From a training output directory
+    # CLI — from a training output directory
     python -m edgerazor.export \\
         --from_training_output ./output/final-model \\
         --quant_mode w1_58a8kv8_embint4 \\
         --output ./Qwen3-0.6B-EdgeRazor-1.58bit
 
-    # From a source model + config
+    # CLI — from a source model directory
     python -m edgerazor.export \\
         --model ./checkpoints/final \\
         --quant_mode w1_58a8kv8_embint4 \\
         --output ./Qwen3-0.6B-EdgeRazor-1.58bit
+
+    # Python API
+    from edgerazor.export import export
+    export(
+        src_dir="./checkpoints/final",
+        dst_dir="./Qwen3-0.6B-EdgeRazor-1.58bit",
+        quant_mode="w1_58a8kv8_embint4",
+    )
 
 The tool generates:
 - ``config.json`` — standard HF config + ``auto_map`` + ``quantization_config``
@@ -46,6 +54,14 @@ from pathlib import Path
 def _get_template_dir() -> Path:
     """Resolve the templates directory shipped with the package."""
     return Path(__file__).resolve().parent / "templates"
+
+
+def _validate_src_dir(path: Path) -> None:
+    """Check that *path* is a directory with model files."""
+    if not path.exists():
+        raise FileNotFoundError(f"Source directory does not exist: {path}")
+    if not path.is_dir():
+        raise NotADirectoryError(f"Source path is not a directory: {path}")
 
 
 def _copy_template(target_dir: Path, filename: str, overwrite: bool = False) -> Path:
@@ -212,6 +228,8 @@ def export(
     """
     src = Path(src_dir)
     dst = Path(dst_dir)
+
+    _validate_src_dir(src)
     dst.mkdir(parents=True, exist_ok=True)
 
     print(f"Exporting EdgeRazor model:")
@@ -246,7 +264,8 @@ def export(
     return dst
 
 
-def main(argv: list[str] | None = None):
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point — parse args and delegate to :func:`export`."""
     ap = argparse.ArgumentParser(
         prog='python -m edgerazor.export',
         description='Export an EdgeRazor-quantized HF model repo.',
@@ -269,7 +288,7 @@ def main(argv: list[str] | None = None):
     )
     ap.add_argument(
         '--no_w_quantized', action='store_true',
-        help='Set is_w_quantized=False in config.json.',
+        help='Set is_w_quantized=False in quantization_config.',
     )
     ap.add_argument(
         '--output', type=str, required=True,
