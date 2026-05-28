@@ -1,12 +1,17 @@
 """Universal EdgeRazor loader — one file for all model families.
 
-Place this file in any EdgeRazor-quantized model repo and add to config.json:
+Place this file in any EdgeRazor-quantized model repo alongside this
+``config.json`` addition:
 
     {
       "auto_map": {
         "AutoModelForCausalLM": "modeling_edgerazor.EdgeRazorForCausalLM"
       },
-      "edgerazor_qconfig": "w1_58a8kv8_embint4"
+      "quantization_config": {
+        "quant_method": "edgerazor",
+        "quant_mode": "w1_58a8kv8_embint4",
+        "is_w_quantized": true
+      }
     }
 
 Then load as:
@@ -34,13 +39,11 @@ class EdgeRazorForCausalLM:
         # all internal calls use trust_remote_code=False to avoid recursion.
         kwargs.pop('trust_remote_code', None)
 
-        # --- resolve EdgeRazor config from config.json ---
         config = AutoConfig.from_pretrained(
             pretrained_model_name_or_path, trust_remote_code=False
         )
         edgerazor_cfg = _resolve_edgerazor_config(config)
 
-        # --- load base model (trust_remote_code=False avoids recursion) ---
         model = AutoModelForCausalLM.from_pretrained(
             pretrained_model_name_or_path,
             *args,
@@ -48,12 +51,10 @@ class EdgeRazorForCausalLM:
             **kwargs,
         )
 
-        # --- apply EdgeRazor quantization ---
         # quantize() replaces nn.Linear → QLinear (structure swap).
         # replace_quantized_weights is NOT called here — it is a training /
-        # export step that bakes quantization into weights. During inference
-        # loading, QLinear handles both cases automatically:
-        #   is_w_quantized=True  → w_quant = W       (identity, pre-quantized)
+        # export step. QLinear handles both cases at inference time:
+        #   is_w_quantized=True  → w_quant = W       (identity)
         #   is_w_quantized=False → w_quant = quant(W) (on-the-fly)
         if edgerazor_cfg:
             from edgerazor import EdgeRazor
@@ -65,25 +66,40 @@ class EdgeRazorForCausalLM:
 
 
 def _resolve_edgerazor_config(config):
-    """Resolve EdgeRazor config from HF config, checking multiple keys.
+    """Resolve EdgeRazor config from HF config.
 
-    Priority: edgerazor_config > edgerazor_qconfig > quant_mode
+    Priority:
+    1. ``edgerazor_config`` — inline full config dict (highest)
+    2. ``quantization_config.quant_mode`` — standard path (v1.3.4+)
+    3. ``edgerazor_qconfig`` — top-level preset name (backward compat)
+    4. ``quant_mode`` — legacy key (backward compat)
     """
-    # Inline full config dict (highest priority)
+    from edgerazor import EdgeRazorConfig
+
+    # 1. Inline full config dict
     cfg = getattr(config, 'edgerazor_config', None)
     if cfg is not None:
         return cfg
 
-    # Preset name (new in v1.3.4)
+    # 2. quantization_config dict (standard path)
+    qc = getattr(config, 'quantization_config', None)
+    if qc is not None and qc.get('quant_method') == 'edgerazor':
+        quant_mode = qc.get('quant_mode')
+        if quant_mode:
+            return EdgeRazorConfig.from_quant_mode(
+                quant_mode,
+                is_w_quantized=qc.get('is_w_quantized', True),
+            )
+
+    # 3. Top-level edgerazor_qconfig (backward compat)
     qconfig = getattr(config, 'edgerazor_qconfig', None)
     if qconfig is not None:
-        from edgerazor import EdgeRazorConfig
         return EdgeRazorConfig.from_quant_mode(
             qconfig,
             is_w_quantized=getattr(config, 'is_w_quantized', True),
         )
 
-    # Legacy quant_mode (backward compatibility)
+    # 4. Legacy quant_mode (backward compat)
     quant_mode = getattr(config, 'quant_mode', None)
     if quant_mode:
         from edgerazor.qat.map import _LEGACY_ALIASES, quant_config_map
@@ -93,7 +109,6 @@ def _resolve_edgerazor_config(config):
                 f"Unknown quant_mode: '{quant_mode}'. "
                 f"Available: {list(quant_config_map.keys())}"
             )
-        from edgerazor import EdgeRazorConfig
         return EdgeRazorConfig.from_quant_mode(
             resolved,
             is_w_quantized=getattr(config, 'is_w_quantized', True),

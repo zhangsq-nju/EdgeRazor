@@ -183,7 +183,7 @@ class TestExportTool:
     """Tests for the export CLI tool."""
 
     def test_export_generates_config_json(self, temp_dir):
-        """Export should create a patched config.json with edgerazor_qconfig."""
+        """Export should create a patched config.json with quantization_config."""
         src = temp_dir / "src"
         dst = temp_dir / "dst"
         src.mkdir()
@@ -212,8 +212,10 @@ class TestExportTool:
         with open(dst / "config.json") as f:
             out_cfg = json.load(f)
 
-        assert out_cfg["edgerazor_qconfig"] == "w1_58a8kv8_embint4"
-        assert out_cfg["is_w_quantized"] is True
+        qc = out_cfg["quantization_config"]
+        assert qc["quant_method"] == "edgerazor"
+        assert qc["quant_mode"] == "w1_58a8kv8_embint4"
+        assert qc["is_w_quantized"] is True
         assert "auto_map" in out_cfg
         assert out_cfg["auto_map"]["AutoModelForCausalLM"] == \
             "modeling_edgerazor.EdgeRazorForCausalLM"
@@ -240,7 +242,7 @@ class TestExportTool:
         assert "class EdgeRazorForCausalLM" in content
 
     def test_export_no_w_quantized(self, temp_dir):
-        """Export with --no_w_quantized should set is_w_quantized=False."""
+        """Export with --no_w_quantized should set is_w_quantized=False in quantization_config."""
         src = temp_dir / "src"
         dst = temp_dir / "dst"
         src.mkdir()
@@ -258,7 +260,7 @@ class TestExportTool:
 
         with open(dst / "config.json") as f:
             out_cfg = json.load(f)
-        assert out_cfg["is_w_quantized"] is False
+        assert out_cfg["quantization_config"]["is_w_quantized"] is False
 
 
 # ──────────────────────────────────────────────

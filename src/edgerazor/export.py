@@ -1,5 +1,20 @@
 """Export tool for building EdgeRazor-quantized HF model repos.
 
+Additions to ``config.json``:
+```
+  "auto_map": {
+    "AutoModelForCausalLM": "modeling_edgerazor.EdgeRazorForCausalLM"
+  },
+  "quantization_config": {
+    "quant_method": "edgerazor",
+    "quant_mode": "w4a8kv8",
+    "weight_bits": 4,
+    "activation_bits": 8,
+    "kv_cache_bits": 8,
+    "is_w_quantized": true
+  }
+```
+
 Usage::
 
     # From a training output directory
@@ -15,10 +30,10 @@ Usage::
         --output ./Qwen3-0.6B-EdgeRazor-1.58bit
 
 The tool generates:
-- ``config.json`` — standard HF config + ``edgerazor_qconfig`` + ``auto_map``
+- ``config.json`` — standard HF config + ``auto_map`` + ``quantization_config``
 - ``modeling_edgerazor.py`` — universal loader (copied from templates)
 - ``model.safetensors`` — quantized weights (copied / symlinked)
-- ``tokenizer.json``, ``tokenizer_config.json``, ``special_tokens_map.json``
+- ``tokenizer.json``, ``tokenizer_config.json``, ``special_tokens_map.json``, etc. (copied from source)
 """
 
 import argparse
@@ -76,10 +91,11 @@ def _patch_config_json(
     auto_map_key: str = "AutoModelForCausalLM",
     auto_map_value: str = "modeling_edgerazor.EdgeRazorForCausalLM",
 ) -> None:
-    """Read config.json, add EdgeRazor fields, write back.
+    """Add ``auto_map`` and ``quantization_config`` to ``config.json``.
 
-    Also adds a ``quantization_config`` key so vLLM can auto-detect the
-    EdgeRazor quantization method without requiring ``--quantization edgerazor``.
+    ``quantization_config`` serves as the single source of truth for all
+    EdgeRazor-specific settings: quant_method (for vLLM auto-detection),
+    quant_mode, bit widths, and is_w_quantized.
     """
     config_path = target_dir / "config.json"
     if not config_path.exists():
@@ -89,16 +105,10 @@ def _patch_config_json(
     with open(config_path, encoding='utf-8') as f:
         cfg = json.load(f)
 
-    # Add auto_map if not present
     if 'auto_map' not in cfg:
         cfg['auto_map'] = {}
     cfg['auto_map'][auto_map_key] = auto_map_value
 
-    # Add EdgeRazor fields
-    cfg['edgerazor_qconfig'] = quant_mode
-    cfg['is_w_quantized'] = is_w_quantized
-
-    # Add quantization_config for vLLM auto-detection
     w_bits, a_bits, kv_bits = _resolve_quant_bits(quant_mode)
     cfg['quantization_config'] = {
         "quant_method": "edgerazor",
@@ -106,12 +116,13 @@ def _patch_config_json(
         "weight_bits": w_bits,
         "activation_bits": a_bits,
         "kv_cache_bits": kv_bits,
+        "is_w_quantized": is_w_quantized,
     }
 
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    print(f"  Patched config.json (edgerazor_qconfig={quant_mode}, "
-          f"quantization_config=edgerazor)")
+    print(f"  Patched config.json (quantization_config.edgerazor, "
+          f"quant_mode={quant_mode})")
 
 
 def _copy_safetensors(src: Path, dst: Path) -> None:
@@ -126,14 +137,15 @@ def _copy_safetensors(src: Path, dst: Path) -> None:
                 print(f"  Skipping {f.name} (already exists)")
 
 
-def _copy_tokenizer_files(src: Path, dst: Path) -> None:
+def _copy_orig_files(src: Path, dst: Path) -> None:
     """Copy tokenizer-related files."""
-    tokenizer_files = [
+    orig_files = [
         'tokenizer.json', 'tokenizer_config.json',
         'special_tokens_map.json', 'vocab.json', 'merges.txt',
         'added_tokens.json', 'chat_template.jinja',
+        'generation_config.json',
     ]
-    for name in tokenizer_files:
+    for name in orig_files:
         f = src / name
         if f.exists() and not (dst / name).exists():
             shutil.copy2(f, dst / name)
@@ -190,7 +202,8 @@ def export(
         src_dir: Source directory with model files (safetensors, tokenizer, config).
         dst_dir: Destination directory for the HF repo.
         quant_mode: Preset name, e.g. ``"w1_58a8kv8_embint4"``.
-        is_w_quantized: Whether weights are already quantized.
+        is_w_quantized: Whether weights are already quantized. Written into
+            ``quantization_config.is_w_quantized``.
         copy_weights: Whether to copy safetensors/bin weights.
         generate_readme: Whether to generate a minimal README.md.
 
@@ -222,7 +235,7 @@ def export(
     _copy_template(dst, 'modeling_edgerazor.py', overwrite=True)
 
     # 5. Copy tokenizer files
-    _copy_tokenizer_files(src, dst)
+    _copy_orig_files(src, dst)
 
     # 6. Optional README
     if generate_readme:

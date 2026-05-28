@@ -150,8 +150,8 @@ class EdgeRazorLinearMethod(LinearMethodBase):
 class EdgeRazorConfig(QuantizationConfig):
     """Quantization config for EdgeRazor W4-A8-KV8 / W1.58-A8-KV8 models.
 
-    Detects EdgeRazor models via ``edgerazor_qconfig`` key in the HF config.json,
-    or by explicit ``--quantization edgerazor``.
+    Auto-detects EdgeRazor models via ``quantization_config.quant_method``
+    in the HF config.json, or by explicit ``--quantization edgerazor``.
     """
 
     def __init__(
@@ -224,13 +224,33 @@ class EdgeRazorConfig(QuantizationConfig):
         if user_quant == "edgerazor":
             return "edgerazor"
 
+        # Primary path: quantization_config.quant_method == "edgerazor"
+        if hf_quant_cfg is not None and hf_quant_cfg.get("quant_method") == "edgerazor":
+            logger.info(
+                "Auto-detected EdgeRazor model (quantization_config.quant_method=edgerazor, "
+                "quant_mode=%s)", hf_quant_cfg.get("quant_mode", "unknown"),
+            )
+            return "edgerazor"
+
         if hf_config is not None:
+            # Secondary: hf_config.quantization_config.quant_method
+            qc = getattr(hf_config, "quantization_config", None)
+            if qc is not None and qc.get("quant_method") == "edgerazor":
+                logger.info(
+                    "Auto-detected EdgeRazor model (quantization_config.quant_method=edgerazor, "
+                    "quant_mode=%s)", qc.get("quant_mode", "unknown"),
+                )
+                return "edgerazor"
+
+            # Backward compat: edgerazor_qconfig top-level key
             if hasattr(hf_config, "edgerazor_qconfig"):
                 logger.info(
                     "Auto-detected EdgeRazor model (edgerazor_qconfig=%s)",
                     hf_config.edgerazor_qconfig,
                 )
                 return "edgerazor"
+
+            # Backward compat: quant_mode top-level key
             if hasattr(hf_config, "quant_mode") and hf_config.quant_mode:
                 logger.info(
                     "Auto-detected EdgeRazor model (quant_mode=%s)",

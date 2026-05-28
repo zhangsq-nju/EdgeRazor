@@ -44,12 +44,11 @@ __all__ = [
     "EdgeRazorLinearMethod",
 ]
 
-# vLLM-dependent classes — only when vLLM is installed
-try:
-    from .edgerazor_quant import EdgeRazorConfig, EdgeRazorLinearMethod
-except ImportError:
-    EdgeRazorConfig = None  # type: ignore[assignment,misc]
-    EdgeRazorLinearMethod = None  # type: ignore[assignment,misc]
+# vLLM-dependent classes — imported lazily via register() to avoid triggering
+# vLLM/PyTorch import chains during plugin discovery (module-level imports
+# can surface unrelated PyTorch inductor bugs as plugin load failures).
+EdgeRazorConfig = None  # type: ignore[assignment,misc]
+EdgeRazorLinearMethod = None  # type: ignore[assignment,misc]
 
 
 def register() -> bool:
@@ -65,10 +64,19 @@ def register() -> bool:
     ``@register_quantization_config``, making ``--quantization edgerazor``
     available without any manual imports.
 
-    Returns ``True`` on success, ``False`` if vLLM is not installed.
+    Returns ``True`` on success, ``False`` if vLLM is not installed or the
+    import chain fails (e.g. due to vLLM/PyTorch version incompatibilities).
     """
+    global EdgeRazorConfig, EdgeRazorLinearMethod
     try:
-        from .edgerazor_quant import EdgeRazorConfig  # noqa: F401
+        from .edgerazor_quant import (  # noqa: F401
+            EdgeRazorConfig as _EdgeRazorConfig,
+        )
+        from .edgerazor_quant import (
+            EdgeRazorLinearMethod as _EdgeRazorLinearMethod,
+        )
+        EdgeRazorConfig = _EdgeRazorConfig
+        EdgeRazorLinearMethod = _EdgeRazorLinearMethod
         return True
-    except ImportError:
+    except Exception:
         return False

@@ -18,7 +18,7 @@ when combined with the universal ``modeling_edgerazor.py`` loader.
 Notes:
     - Only weight quantization (WX) is applied.  Activation and KV-cache
       quantization require the v1.3.4+ ``modeling_edgerazor.py`` +
-      ``edgerazor_qconfig`` inference pipeline.
+      ``quantization_config`` inference pipeline.
     - The input model is loaded at ``torch.bfloat16``.
 """
 from __future__ import annotations
