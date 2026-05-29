@@ -57,6 +57,8 @@ class EdgeRazorLinearMethod(LinearMethodBase):
         self.quant_config = quant_config
         self.block_size = quant_config.weight_block_size[0]
         self.use_activation_quant = quant_config.activation_bits > 0
+        self._packed = False
+        self._first_forward_logged = False
 
     def create_weights(
         self,
@@ -108,6 +110,7 @@ class EdgeRazorLinearMethod(LinearMethodBase):
         qweight_scale = w_scale.squeeze(-1).contiguous().to(torch.bfloat16)
 
         # Replace temporary weight with packed params
+        orig_bytes = w.numel() * w.element_size()
         del layer.weight
         layer.register_parameter(
             "qweight",
@@ -117,14 +120,18 @@ class EdgeRazorLinearMethod(LinearMethodBase):
             "qweight_scale",
             Parameter(qweight_scale.contiguous(), requires_grad=False),
         )
-        layer._edgerazor_needs_pack = False
 
-        logger.debug(
-            "Packed %s: %s → qweight %s + scale %s",
-            type(layer).__name__,
-            list(w.shape),
-            list(layer.qweight.shape),
-            list(layer.qweight_scale.shape),
+        packed_bytes = (qweight.numel() * 1) + (qweight_scale.numel() * 2)
+        ratio = packed_bytes / orig_bytes * 100
+        layer._edgerazor_needs_pack = False
+        self._packed = True
+
+        logger.info(
+            "[EdgeRazor W4] Packed weight [%d, %d] → qweight+scale: "
+            "%s → %s  (%.1f%% of bf16, %.1f bits/el)",
+            out_dim, in_dim,
+            list(w.shape), list(qweight.shape),
+            ratio, ratio * 16 / 100,
         )
 
     def apply(
@@ -133,6 +140,14 @@ class EdgeRazorLinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if not self._first_forward_logged:
+            logger.info(
+                "[EdgeRazor W4] First forward — dequantizing per-block INT4 "
+                "weights (block_size=%d), activation dtype=%s",
+                self.block_size, x.dtype,
+            )
+            self._first_forward_logged = True
+
         w_deq = dequantize_weight(
             layer.qweight,
             layer.qweight_scale,
@@ -174,6 +189,16 @@ class EdgeRazorConfig(QuantizationConfig):
         self.kv_cache_bits = kv_cache_bits
         self.quant_mode = quant_mode
         self.modules_to_not_convert = modules_to_not_convert or []
+
+        logger.info(
+            "[EdgeRazor] Quantization config created: W%dA%dKV%d, "
+            "weight_block_size=%s, quant_mode=%s",
+            self.weight_bits,
+            self.activation_bits,
+            self.kv_cache_bits,
+            self.weight_block_size,
+            self.quant_mode or "default",
+        )
 
     def __repr__(self) -> str:
         return (
