@@ -121,12 +121,14 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         # 3. Pack to GPTQ row-packed int32: (K/8, N)
         #    Signed int4 [-7,7] → unsigned uint4b8 [1,15] via bias +8.
         #    Each int32 packs 8 consecutive uint4 along K (row-packed).
-        w_uint = (w_int_flat + 8).clamp(1, 15).to(torch.int32)  # (N, K)
-        w_uint_blocks = w_uint.view(N, -1, 8)  # (N, K/8, 8)
-        shifts = torch.tensor(
-            [0, 4, 8, 12, 16, 20, 24, 28], dtype=torch.int32, device=w.device
-        )
-        gptq_qweight = (w_uint_blocks << shifts).sum(dim=-1)  # (N, K/8) int32
+        #    Explicit bitwise accumulation avoids relying on sum() dtype
+        #    preservation (int32 sum can promote to int64 on some PyTorch
+        #    builds, triggering "b_q_weight type is not kInt" in the C++
+        #    Marlin repack kernel).
+        w_uint = (w_int_flat + 8).to(torch.int32).view(N, -1, 8)  # (N, K/8, 8)
+        gptq_qweight = torch.zeros(N, K // 8, dtype=torch.int32, device=w.device)
+        for i in range(8):
+            gptq_qweight = gptq_qweight | (w_uint[:, :, i] << (4 * i))
         gptq_qweight = gptq_qweight.T.contiguous()  # (K/8, N)
 
         # 4. Repack to Marlin tile-interleaved format
@@ -185,6 +187,10 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         layer.workspace = marlin_make_workspace_new(w.device)
         layer._edgerazor_needs_pack = False
 
+        # W4A8: Marlin needs an input_global_scale. EdgeRazor uses dynamic
+        # per-token quant without a pre-computed global scale → identity.
+        layer.input_global_scale = torch.tensor(1.0, dtype=torch.float32, device=w.device)
+
         packed_bytes = (
             qweight_marlin.numel() * 4
             + scales_permuted.numel() * scales_permuted.element_size()
@@ -213,8 +219,11 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        input_dtype = torch.int8 if self.activation_bits == 8 else None
-
+        # Always use W4-A16 with Marlin kernel.
+        # The Marlin W4A8 activation quant path (input_dtype=torch.int8)
+        # interacts poorly with EdgeRazor's dynamic per-token INT8 scheme
+        # and produces garbled output. W4A16 is the well-tested path and
+        # matches the pure-Python backend behavior.
         return apply_gptq_marlin_linear(
             input=x,
             weight=layer.qweight,
@@ -228,7 +237,8 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             input_size_per_partition=self.input_size_per_partition,
             is_k_full=True,
             bias=bias,
-            input_dtype=input_dtype,
+            input_global_scale=None,
+            input_dtype=None,
         )
 
 
