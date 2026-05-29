@@ -55,7 +55,7 @@ class EdgeRazorLinearMethod(LinearMethodBase):
 
     def __init__(self, quant_config: "EdgeRazorConfig"):
         self.quant_config = quant_config
-        self.block_size = quant_config.weight_block_size
+        self.block_size = quant_config.weight_block_size[0]
         self.use_activation_quant = quant_config.activation_bits > 0
 
     def create_weights(
@@ -157,7 +157,7 @@ class EdgeRazorConfig(QuantizationConfig):
     def __init__(
         self,
         weight_bits: int = 4,
-        weight_block_size: int = W4A8_BLOCK_SIZE,
+        weight_block_size: int | list[int] = W4A8_BLOCK_SIZE,
         activation_bits: int = 8,
         kv_cache_bits: int = 8,
         quant_mode: str = "",
@@ -165,6 +165,10 @@ class EdgeRazorConfig(QuantizationConfig):
     ) -> None:
         super().__init__()
         self.weight_bits = weight_bits
+        # vLLM's LinearBase calls len(quant_config.weight_block_size), so it
+        # must be a list (e.g. [32] for K-only block, per-channel-N scale).
+        if isinstance(weight_block_size, int):
+            weight_block_size = [weight_block_size]
         self.weight_block_size = weight_block_size
         self.activation_bits = activation_bits
         self.kv_cache_bits = kv_cache_bits
@@ -201,6 +205,8 @@ class EdgeRazorConfig(QuantizationConfig):
         quant_mode = config.get("quant_mode", "")
         weight_bits = config.get("weight_bits", 4)
         weight_block_size = config.get("weight_block_size", W4A8_BLOCK_SIZE)
+        if isinstance(weight_block_size, int):
+            weight_block_size = [weight_block_size]
         activation_bits = config.get("activation_bits", 8)
         kv_cache_bits = config.get("kv_cache_bits", 8)
         modules_to_not_convert = config.get("modules_to_not_convert", [])
