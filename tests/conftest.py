@@ -1,8 +1,12 @@
 """Shared fixtures for EdgeRazor test suite."""
 
 import logging
+import os
 import tempfile
 from pathlib import Path
+
+# Prevent deepspeed import chain (triggers PydanticDeprecatedSince211)
+os.environ["ACCELERATE_USE_DEEPSPEED"] = "false"
 
 import pytest
 import torch
