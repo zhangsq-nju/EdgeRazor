@@ -15,15 +15,25 @@ importable and usable standalone.
 
 # Pure quant ops (no vLLM dependency) — always available
 from .quant_ops import (
+    ER_W2A8_BLOCK_SIZE,
+    ER_W4A8_BLOCK_SIZE,
+    ER_W8A8_BLOCK_SIZE,
+    IE_W2A8_BLOCK_SIZE,
+    IE_W4A8_BLOCK_SIZE,
+    IE_W8A8_BLOCK_SIZE,
+    INT1_58_MAX,
     INT4_MAX,
     INT8_MAX,
+    W2A8_BLOCK_SIZE,
     W4A8_BLOCK_SIZE,
+    W8A8_BLOCK_SIZE,
     dequantize_weight,
     pack_int4,
     quantize_activation_per_block_int8,
     quantize_activation_per_token_int8,
     quantize_weight_per_block_int4,
     quantize_weight_ternary_to_int4,
+    resolve_quant_block,
     unpack_int4,
 )
 
@@ -36,9 +46,13 @@ __all__ = [
     "quantize_weight_ternary_to_int4",
     "quantize_activation_per_token_int8",
     "quantize_activation_per_block_int8",
-    "W4A8_BLOCK_SIZE",
-    "INT4_MAX",
-    "INT8_MAX",
+    "resolve_quant_block",
+    # Block-size constants
+    "ER_W2A8_BLOCK_SIZE", "ER_W4A8_BLOCK_SIZE", "ER_W8A8_BLOCK_SIZE",
+    "IE_W2A8_BLOCK_SIZE", "IE_W4A8_BLOCK_SIZE", "IE_W8A8_BLOCK_SIZE",
+    "W2A8_BLOCK_SIZE", "W4A8_BLOCK_SIZE", "W8A8_BLOCK_SIZE",
+    "INT1_58_MAX", "INT4_MAX", "INT8_MAX",
+    # Plugin
     "register",
     "EdgeRazorConfig",
     "EdgeRazorLinearMethod",

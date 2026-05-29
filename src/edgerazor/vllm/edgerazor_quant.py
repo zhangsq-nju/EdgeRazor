@@ -32,10 +32,11 @@ from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmb
 from vllm.model_executor.utils import set_weight_attrs
 
 from .quant_ops import (
-    INT4_MAX,
-    W4A8_BLOCK_SIZE,
+    ER_W4A8_BLOCK_SIZE,
+    IE_W4A8_BLOCK_SIZE,
     dequantize_weight,
-    pack_int4,
+    quantize_weight_per_block_int4,
+    resolve_quant_block,
 )
 
 logger = init_logger("vllm.edgerazor.quant")
@@ -55,7 +56,9 @@ class EdgeRazorLinearMethod(LinearMethodBase):
 
     def __init__(self, quant_config: "EdgeRazorConfig"):
         self.quant_config = quant_config
-        self.block_size = quant_config.weight_block_size[0]
+        self.er_block_size = quant_config._quant_block_size   # quantization block
+        self.ie_block_size = quant_config._scale_block_size   # scale / dequant block
+        self.needs_split = quant_config._needs_scale_split
         self.use_activation_quant = quant_config.activation_bits > 0
 
     def create_weights(
@@ -93,19 +96,14 @@ class EdgeRazorLinearMethod(LinearMethodBase):
             return
 
         w = layer.weight.data
-        bs = self.block_size
         out_dim, in_dim = w.shape
 
-        # Reshape to per-block: (out, in) → (out, nblocks, bs)
-        w_blocks = w.view(out_dim, -1, bs)
-
-        # Per-block symmetric absmax scale
-        w_scale = w_blocks.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5) / INT4_MAX
-
-        # Quantize to INT4 [-7, 7] and pack
-        w_int = (w_blocks / w_scale).round().clamp(-INT4_MAX, INT4_MAX).to(torch.int8)
-        qweight = pack_int4(w_int.view(out_dim, -1))
-        qweight_scale = w_scale.squeeze(-1).contiguous().to(torch.bfloat16)
+        # Quantize with ER block_size, pack with IE block_size
+        qweight, qweight_scale = quantize_weight_per_block_int4(
+            w,
+            er_block_size=self.er_block_size,
+            ie_block_size=self.ie_block_size,
+        )
 
         # Replace temporary weight with packed params
         orig_bytes = w.numel() * w.element_size()
@@ -125,9 +123,10 @@ class EdgeRazorLinearMethod(LinearMethodBase):
 
         logger.info(
             "[EdgeRazor W4] Packed weight %s → qweight+scale: "
-            "%s → %s  (%.1f%% of bf16, %.1f bits/el)",
+            "%s → %s  (%.1f%% of bf16, %.1f bits/el, ER=%d IE=%d split=%s)",
             list(w.shape), list(qweight.shape), list(qweight_scale.shape),
             ratio, ratio * 16 / 100,
+            self.er_block_size, self.ie_block_size, self.needs_split,
         )
 
     def apply(
@@ -139,7 +138,7 @@ class EdgeRazorLinearMethod(LinearMethodBase):
         w_deq = dequantize_weight(
             layer.qweight,
             layer.qweight_scale,
-            block_size=self.block_size,
+            block_size=self.ie_block_size,
             out_dtype=x.dtype,
         )
         return torch.nn.functional.linear(x, w_deq, bias)
@@ -160,7 +159,9 @@ class EdgeRazorConfig(QuantizationConfig):
     def __init__(
         self,
         weight_bits: int = 4,
-        weight_block_size: int | list[int] = W4A8_BLOCK_SIZE,
+        weight_block_size: int | list[int] | None = None,
+        er_block_size: int = ER_W4A8_BLOCK_SIZE,
+        ie_block_size: int = IE_W4A8_BLOCK_SIZE,
         activation_bits: int = 8,
         kv_cache_bits: int = 8,
         quant_mode: str = "",
@@ -168,23 +169,40 @@ class EdgeRazorConfig(QuantizationConfig):
     ) -> None:
         super().__init__()
         self.weight_bits = weight_bits
-        # vLLM's LinearBase calls len(quant_config.weight_block_size), so it
-        # must be a list (e.g. [32] for K-only block, per-channel-N scale).
-        if isinstance(weight_block_size, int):
-            weight_block_size = [weight_block_size]
-        self.weight_block_size = weight_block_size
         self.activation_bits = activation_bits
         self.kv_cache_bits = kv_cache_bits
         self.quant_mode = quant_mode
         self.modules_to_not_convert = modules_to_not_convert or []
 
+        # Resolve block sizes: weight_block_size (legacy) overrides IE
+        if weight_block_size is None:
+            weight_block_size = ie_block_size
+        if isinstance(weight_block_size, list):
+            weight_block_size = weight_block_size[0]
+        if isinstance(weight_block_size, int):
+            if weight_block_size != ie_block_size:
+                ie_block_size = weight_block_size
+        # vLLM's LinearBase calls len(quant_config.weight_block_size),
+        # so expose ie as a list for compat.
+        self.weight_block_size = [ie_block_size]
+        self.er_block_size = er_block_size
+        self.ie_block_size = ie_block_size
+
+        # Validate ER / IE split
+        resolved = resolve_quant_block(self.er_block_size, self.ie_block_size)
+        self._quant_block_size = resolved[0]
+        self._scale_block_size = resolved[1]
+        self._needs_scale_split = resolved[2]
+
         logger.info(
             "[EdgeRazor] Quantization config created: W%dA%dKV%d, "
-            "weight_block_size=%s, quant_mode=%s",
+            "ER_block=%d IE_block=%d split=%s, quant_mode=%s",
             self.weight_bits,
             self.activation_bits,
             self.kv_cache_bits,
-            self.weight_block_size,
+            self.er_block_size,
+            self.ie_block_size,
+            self._needs_scale_split,
             self.quant_mode or "default",
         )
 
@@ -217,15 +235,15 @@ class EdgeRazorConfig(QuantizationConfig):
         """Create config from a model's ``quantization_config`` dict."""
         quant_mode = config.get("quant_mode", "")
         weight_bits = config.get("weight_bits", 4)
-        weight_block_size = config.get("weight_block_size", W4A8_BLOCK_SIZE)
-        if isinstance(weight_block_size, int):
-            weight_block_size = [weight_block_size]
+        er_block_size = config.get("er_block_size", ER_W4A8_BLOCK_SIZE)
+        ie_block_size = config.get("ie_block_size", IE_W4A8_BLOCK_SIZE)
         activation_bits = config.get("activation_bits", 8)
         kv_cache_bits = config.get("kv_cache_bits", 8)
         modules_to_not_convert = config.get("modules_to_not_convert", [])
         return cls(
             weight_bits=weight_bits,
-            weight_block_size=weight_block_size,
+            er_block_size=er_block_size,
+            ie_block_size=ie_block_size,
             activation_bits=activation_bits,
             kv_cache_bits=kv_cache_bits,
             quant_mode=quant_mode,

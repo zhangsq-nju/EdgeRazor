@@ -177,7 +177,7 @@ def print_logo() -> None:
     fonts = ["slant", "cyberlarge", "ansi_shadow"]
     font = random.choice(fonts)
     try:
-        result = pyfiglet.figlet_format("EdgeRazor", font=font)
+        result = pyfiglet.figlet_format("EdgeRazor", font=font).rstrip('\n')
         print(Fore.CYAN + result + Style.RESET_ALL)
     except pyfiglet.FontNotFound:
         print(Fore.YELLOW + "EdgeRazor" + Style.RESET_ALL)

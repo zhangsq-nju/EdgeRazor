@@ -4,7 +4,7 @@ Pure quantization operations — no vLLM dependency.
 These functions implement the EdgeRazor per-block INT4 weight quantization
 format, which is compatible with GGUF Q4_0:
 
-  W4-A8:  block_size=32, symmetric absmax per-block, 2×INT4 packed per uint8
+  All schemes: block_size=256, symmetric absmax per-block, 2×INT4 packed per uint8
 
 Reference quant functions (from edgerazor.qat.util.quant_function):
   - weight_quant_uniform_symmetric_absmax_per_block_int4
@@ -20,15 +20,34 @@ from torch import Tensor
 # Constants (maps 1:1 with quant_function_config.py)
 # ──────────────────────────────────────────────
 
-W4A8_BLOCK_SIZE = 256  # from edgerazor.qat.util.quant_function_config
-INT4_MAX = 7           # 2^(4-1) - 1
-INT8_MAX = 127         # 2^(8-1) - 1
+INT1_58_MAX = 1           # ternary {-1, 0, 1}
+INT4_MAX    = 7           # 2^(4-1) - 1
+INT8_MAX    = 127         # 2^(8-1) - 1
 
-# block sizes for different schemes
-W2A8_BLOCK_SIZE = 256
-W5A8_BLOCK_SIZE = 256
-W8A8_BLOCK_SIZE = 256
+# ── Block-size constants ──────────────────────────────────────────
+# ER_*  = EdgeRazor training block size   (from quant_function_config.py)
+# IE_*  = Inference Engine block size     (target packing granularity)
+#
+# When ER > IE, the scale is computed over ER elements then replicated
+# IE/ER times — the weight-int values are identical to training, and
+# the dequantized result is bit-exact regardless of IE granularity.
+#
+# When ER <= IE, quantization runs directly at IE granularity.
 
+# EdgeRazor weight block sizes (used for training)
+ER_W2A8_BLOCK_SIZE = 256
+ER_W4A8_BLOCK_SIZE = 256
+ER_W8A8_BLOCK_SIZE = 256
+
+# Inference engine weight block sizes (used for inference / packing)
+IE_W2A8_BLOCK_SIZE = 32
+IE_W4A8_BLOCK_SIZE = 32
+IE_W8A8_BLOCK_SIZE = 32
+
+# ── Compat aliases (kept for external imports) ────────────────────
+W4A8_BLOCK_SIZE = ER_W4A8_BLOCK_SIZE
+W2A8_BLOCK_SIZE = ER_W2A8_BLOCK_SIZE
+W8A8_BLOCK_SIZE = ER_W8A8_BLOCK_SIZE
 
 # ──────────────────────────────────────────────
 # Pack / Unpack INT4
@@ -71,38 +90,75 @@ def unpack_int4(qweight: Tensor) -> Tensor:
 
 
 # ──────────────────────────────────────────────
+# ER / IE block-size resolution
+# ──────────────────────────────────────────────
+
+def resolve_quant_block(er_block: int, ie_block: int) -> tuple[int, int, bool]:
+    """Resolve training vs inference block sizes.
+
+    Returns ``(quant_block, scale_block, needs_split)``:
+
+    - ``quant_block``: block size used to compute weight-int values.
+    - ``scale_block``: block size of the stored scale tensor.
+    - ``needs_split``: whether scales must be replicated (ER > IE).
+
+    Raises ``ValueError`` if *er_block* is not an integer multiple of
+    *ie_block* (required for scale replication correctness).
+    """
+    if er_block <= ie_block:
+        return ie_block, ie_block, False
+
+    if er_block % ie_block != 0:
+        raise ValueError(
+            f"EdgeRazor training block_size ({er_block}) must be an "
+            f"integer multiple of inference block_size ({ie_block})."
+        )
+    return er_block, ie_block, True
+
+
+# ──────────────────────────────────────────────
 # Per-block quantization / dequantization
 # ──────────────────────────────────────────────
 
 def quantize_weight_per_block_int4(
     w: Tensor,
-    block_size: int = W4A8_BLOCK_SIZE,
+    er_block_size: int = ER_W4A8_BLOCK_SIZE,
+    ie_block_size: int = IE_W4A8_BLOCK_SIZE,
     epsilon: float = 1e-5,
 ) -> tuple[Tensor, Tensor]:
-    """Quantize bf16/fp16 weight to per-block INT4.
+    """Quantize bf16/fp16 weight to per-block INT4 with ER/IE support.
 
-    The weight is reshaped to ``(out_dim, nblocks, block_size)``, a symmetric
-    absmax scale is computed per block, and values are rounded into [-7, 7].
+    When *er_block_size* > *ie_block_size*, the INT4 values are computed
+    over the larger ER block (matching training), then the resulting scale
+    is replicated *ie_block_size* times for the packed storage layout.
+    This guarantees dequantized weights are identical to training.
 
     Args:
         w: weight tensor, shape ``(out_dim, in_dim)``.
-        block_size: group size per block (default 32, matching GGUF Q4_0).
+        er_block_size: EdgeRazor training block size (default 256).
+        ie_block_size: inference engine packing block size (default 32).
         epsilon: minimum scale to avoid division by zero.
 
     Returns:
         ``(qweight, qweight_scale)`` where:
           - ``qweight``: packed uint8 ``(out_dim, in_dim // 2)``
-          - ``qweight_scale``: bf16 ``(out_dim, nblocks)``
+          - ``qweight_scale``: bf16 ``(out_dim, in_dim // ie_block_size)``
     """
     out_dim, in_dim = w.shape
-    w_blocks = w.view(out_dim, -1, block_size)
+    quant_block, scale_block, needs_split = resolve_quant_block(
+        er_block_size, ie_block_size,
+    )
 
-    # Per-block symmetric absmax scale
+    w_blocks = w.view(out_dim, -1, quant_block)
     w_scale = w_blocks.abs().amax(dim=-1, keepdim=True).clamp(min=epsilon) / INT4_MAX
 
-    # Quantize to INT4 [-7, 7] and pack
     w_int = (w_blocks / w_scale).round().clamp(-INT4_MAX, INT4_MAX).to(torch.int8)
     qweight = pack_int4(w_int.view(out_dim, -1))
+
+    if needs_split:
+        n = er_block_size // ie_block_size
+        w_scale = w_scale.squeeze(-1).repeat_interleave(n, dim=1)
+
     qweight_scale = w_scale.squeeze(-1).contiguous().to(torch.bfloat16)
 
     return qweight, qweight_scale
@@ -111,15 +167,18 @@ def quantize_weight_per_block_int4(
 def dequantize_weight(
     qweight: Tensor,
     qweight_scale: Tensor,
-    block_size: int = W4A8_BLOCK_SIZE,
+    block_size: int = IE_W4A8_BLOCK_SIZE,
     out_dtype: torch.dtype = torch.bfloat16,
 ) -> Tensor:
     """Dequantize per-block INT4 weights to the target dtype.
 
+    *block_size* must match the *ie_block_size* used during packing
+    (i.e. the stored scale granularity, not the training ER size).
+
     Args:
         qweight: packed uint8 ``(out_dim, in_dim // 2)``.
-        qweight_scale: bf16 ``(out_dim, nblocks)``.
-        block_size: group size per block.
+        qweight_scale: bf16 ``(out_dim, in_dim // block_size)``.
+        block_size: inference scale block size (default IE_W4A8_BLOCK_SIZE).
         out_dtype: target dtype for dequantized weight.
 
     Returns:
