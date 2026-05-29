@@ -219,7 +219,7 @@ class EdgeRazorConfig:
         """Create EdgeRazorConfig from a quant_mode preset string.
 
         This is the recommended way to create an inference config from the
-        ``edgerazor_qconfig`` field in a model's ``config.json``.
+        ``quantization_config.quant_mode`` field in a model's ``config.json``.
 
         Args:
             quant_mode: Preset name, e.g. ``"w1_58a8kv8_embint4"``.

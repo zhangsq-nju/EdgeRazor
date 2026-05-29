@@ -3,7 +3,7 @@
 Tests:
 - EdgeRazorConfig.from_quant_mode() factory method
 - New quant_config_map entries and legacy aliases
-- Export tool generates correct HF repo structure
+- Convert tool generates correct HF repo structure
 - replace_quantized_weights auto-sets is_w_quantized
 - modeling_edgerazor.py template is valid Python
 """
@@ -175,15 +175,15 @@ class TestReplaceQuantizedWeightsAutoSet:
 
 
 # ──────────────────────────────────────────────
-# Export tool tests
+# Convert tool tests (formerly export tool)
 # ──────────────────────────────────────────────
 
 
-class TestExportTool:
-    """Tests for the export CLI tool."""
+class TestConvertTool:
+    """Tests for the convert tool."""
 
-    def test_export_generates_config_json(self, temp_dir):
-        """Export should create a patched config.json with edgerazor_qconfig."""
+    def test_convert_generates_config_json(self, temp_dir):
+        """Convert should create a patched config.json with quantization_config."""
         src = temp_dir / "src"
         dst = temp_dir / "dst"
         src.mkdir()
@@ -198,28 +198,30 @@ class TestExportTool:
         with open(src / "config.json", "w") as f:
             json.dump(base_config, f)
 
-        from edgerazor.export import export
+        import shutil
 
-        export(
-            src_dir=src,
-            dst_dir=dst,
-            quant_mode="w1_58a8kv8_embint4",
-            copy_weights=False,
-        )
+        dst.mkdir()
+        shutil.copy2(src / "config.json", dst / "config.json")
+
+        from edgerazor.convert import _patch_config_json
+
+        _patch_config_json(dst, "w1_58a8kv8_embint4", is_w_quantized=True)
 
         # Verify config.json was patched
         assert (dst / "config.json").exists()
         with open(dst / "config.json") as f:
             out_cfg = json.load(f)
 
-        assert out_cfg["edgerazor_qconfig"] == "w1_58a8kv8_embint4"
-        assert out_cfg["is_w_quantized"] is True
+        qc = out_cfg["quantization_config"]
+        assert qc["quant_method"] == "edgerazor"
+        assert qc["quant_mode"] == "w1_58a8kv8_embint4"
+        assert qc["is_w_quantized"] is True
         assert "auto_map" in out_cfg
         assert out_cfg["auto_map"]["AutoModelForCausalLM"] == \
             "modeling_edgerazor.EdgeRazorForCausalLM"
 
-    def test_export_copies_modeling_edgerazor(self, temp_dir):
-        """Export should copy the modeling_edgerazor.py template."""
+    def test_convert_copies_modeling_edgerazor(self, temp_dir):
+        """Convert should copy the modeling_edgerazor.py template."""
         src = temp_dir / "src"
         dst = temp_dir / "dst"
         src.mkdir()
@@ -231,16 +233,18 @@ class TestExportTool:
         with open(src / "config.json", "w") as f:
             json.dump(base_config, f)
 
-        from edgerazor.export import export
+        dst.mkdir()
 
-        export(src_dir=src, dst_dir=dst, quant_mode="w4a8kv8", copy_weights=False)
+        from edgerazor.convert import _copy_template
+
+        _copy_template(dst, "modeling_edgerazor.py", overwrite=True)
 
         assert (dst / "modeling_edgerazor.py").exists()
         content = (dst / "modeling_edgerazor.py").read_text()
         assert "class EdgeRazorForCausalLM" in content
 
-    def test_export_no_w_quantized(self, temp_dir):
-        """Export with --no_w_quantized should set is_w_quantized=False."""
+    def test_convert_no_w_quantized(self, temp_dir):
+        """Convert with --is_w_quantized false should set is_w_quantized=False in quantization_config."""
         src = temp_dir / "src"
         dst = temp_dir / "dst"
         src.mkdir()
@@ -249,16 +253,18 @@ class TestExportTool:
         with open(src / "config.json", "w") as f:
             json.dump(base_config, f)
 
-        from edgerazor.export import export
+        import shutil
 
-        export(
-            src_dir=src, dst_dir=dst, quant_mode="w4a8kv8",
-            is_w_quantized=False, copy_weights=False,
-        )
+        dst.mkdir()
+        shutil.copy2(src / "config.json", dst / "config.json")
+
+        from edgerazor.convert import _patch_config_json
+
+        _patch_config_json(dst, "w4a8kv8", is_w_quantized=False)
 
         with open(dst / "config.json") as f:
             out_cfg = json.load(f)
-        assert out_cfg["is_w_quantized"] is False
+        assert out_cfg["quantization_config"]["is_w_quantized"] is False
 
 
 # ──────────────────────────────────────────────

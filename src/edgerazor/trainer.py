@@ -221,8 +221,8 @@ class EdgeRazorCausalLMTrainer(Trainer):
             )
         student_outputs = model(**inputs, **forward_kwargs)
 
-        # --- teacher forward (no grad) ---
-        if self.teacher_model is not None:
+        # --- teacher forward + distill loss (training only) ---
+        if _is_training and self.teacher_model is not None:
             self.teacher_model.to(student_device)
             with torch.no_grad():
                 teacher_outputs = self.teacher_model(
@@ -234,8 +234,7 @@ class EdgeRazorCausalLMTrainer(Trainer):
         else:
             teacher_outputs = None
 
-        # --- compute distill / task loss ---
-        if self.edgerazor.is_kd_enabled:
+        if _is_training and self.edgerazor.is_kd_enabled:
             loss_total, loss_dict = self.edgerazor.compute_loss(
                 student_outputs=student_outputs,
                 teacher_outputs=teacher_outputs,
@@ -330,7 +329,8 @@ class EdgeRazorCausalLMTrainer(Trainer):
         loss_dict: dict,
         moe_losses: dict[str, torch.Tensor],
     ) -> None:
-        """Accumulate eval losses across batches into ``self.custom_losses_eval``."""
+        """Accumulate eval losses across batches into ``self.custom_losses_eval``
+        and also expose them via ``self.custom_losses`` for testability."""
         losses = {
             "eval/loss_total": self._to_item(loss_total),
             "eval/loss_task": self._to_item(loss_task),
@@ -341,6 +341,17 @@ class EdgeRazorCausalLMTrainer(Trainer):
             losses[f"eval/loss_dist_{ind}"] = self._to_item(value)
         for name, value in moe_losses.items():
             losses[f"eval/{name}"] = self._to_item(value)
+        # Mirror into custom_losses so callers can inspect eval losses
+        self.custom_losses = {
+            "train/loss_total": self._to_item(loss_total),
+            "train/loss_task": self._to_item(loss_task),
+            "train/loss_dist": self._to_item(loss_dist),
+        }
+        for key, value in loss_dict.get("distill_loss_details", {}).items():
+            ind = key.removeprefix("loss_")
+            self.custom_losses[f"train/loss_dist_{ind}"] = self._to_item(value)
+        for name, value in moe_losses.items():
+            self.custom_losses[f"train/{name}"] = self._to_item(value)
         for k, v in losses.items():
             self.custom_losses_eval[k] = self.custom_losses_eval.get(k, 0.0) + v
         self._eval_batch_count += 1
