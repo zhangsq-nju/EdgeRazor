@@ -38,7 +38,7 @@ from .quant_ops import (
     pack_int4,
 )
 
-logger = init_logger(__name__)
+logger = init_logger("vllm.edgerazor.quant")
 
 
 # ──────────────────────────────────────────────
@@ -57,7 +57,6 @@ class EdgeRazorLinearMethod(LinearMethodBase):
         self.quant_config = quant_config
         self.block_size = quant_config.weight_block_size[0]
         self.use_activation_quant = quant_config.activation_bits > 0
-        self._first_forward_logged = False
 
     def create_weights(
         self,
@@ -137,14 +136,6 @@ class EdgeRazorLinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if not self._first_forward_logged:
-            logger.info(
-                "[EdgeRazor W4] First forward — dequantizing per-block INT4 "
-                "weights (block_size=%d), activation dtype=%s",
-                self.block_size, x.dtype,
-            )
-            self._first_forward_logged = True
-
         w_deq = dequantize_weight(
             layer.qweight,
             layer.qweight_scale,

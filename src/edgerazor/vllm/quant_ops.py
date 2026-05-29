@@ -20,14 +20,14 @@ from torch import Tensor
 # Constants (maps 1:1 with quant_function_config.py)
 # ──────────────────────────────────────────────
 
-W4A8_BLOCK_SIZE = 32  # from edgerazor.qat.util.quant_function_config
+W4A8_BLOCK_SIZE = 256  # from edgerazor.qat.util.quant_function_config
 INT4_MAX = 7           # 2^(4-1) - 1
 INT8_MAX = 127         # 2^(8-1) - 1
 
 # block sizes for different schemes
 W2A8_BLOCK_SIZE = 256
-W5A8_BLOCK_SIZE = 32
-W8A8_BLOCK_SIZE = 32
+W5A8_BLOCK_SIZE = 256
+W8A8_BLOCK_SIZE = 256
 
 
 # ──────────────────────────────────────────────
