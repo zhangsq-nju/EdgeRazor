@@ -119,20 +119,22 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         # w_scale: (N, K/128)  bf16
 
         # 3. Pack to GPTQ row-packed int32: (K/8, N)
-        #    int8 [-7,7] & 0xF → uint4b8 encoding directly
-        num_k_blocks = K // 8
-        w_int_packed = w_int_flat.view(N, num_k_blocks, 8).to(torch.int32) & 0xF
+        #    Signed int4 [-7,7] → unsigned uint4b8 [1,15] via bias +8.
+        #    Each int32 packs 8 consecutive uint4 along K (row-packed).
+        w_uint = (w_int_flat + 8).clamp(1, 15).to(torch.int32)  # (N, K)
+        w_uint_blocks = w_uint.view(N, -1, 8)  # (N, K/8, 8)
         shifts = torch.tensor(
             [0, 4, 8, 12, 16, 20, 24, 28], dtype=torch.int32, device=w.device
         )
-        gptq_qweight = (w_int_packed << shifts).sum(dim=-1)  # (N, K/8) int32
+        gptq_qweight = (w_uint_blocks << shifts).sum(dim=-1)  # (N, K/8) int32
         gptq_qweight = gptq_qweight.T.contiguous()  # (K/8, N)
 
         # 4. Repack to Marlin tile-interleaved format
         is_a8 = self.activation_bits == 8
+        perm = torch.empty(0, dtype=torch.int32, device=w.device)
         qweight_marlin = ops.gptq_marlin_repack(
             gptq_qweight,
-            perm=None,
+            perm=perm,
             size_k=K,
             size_n=N,
             num_bits=4,
