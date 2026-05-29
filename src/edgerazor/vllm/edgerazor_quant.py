@@ -57,7 +57,6 @@ class EdgeRazorLinearMethod(LinearMethodBase):
         self.quant_config = quant_config
         self.block_size = quant_config.weight_block_size[0]
         self.use_activation_quant = quant_config.activation_bits > 0
-        self._first_forward_logged = False
 
     def create_weights(
         self,
@@ -119,16 +118,18 @@ class EdgeRazorLinearMethod(LinearMethodBase):
             "qweight_scale",
             Parameter(qweight_scale.contiguous(), requires_grad=False),
         )
-        layer._edgerazor_needs_pack = False
 
-        packed_bytes = qweight.numel() * 1 + qweight_scale.numel() * 2
+        packed_bytes = (qweight.numel() * 1) + (qweight_scale.numel() * 2)
         ratio = packed_bytes / orig_bytes * 100
+        layer._edgerazor_needs_pack = False
+        self._packed = True
 
-        logger.info(
-            "[EdgeRazor W4] Packed weight %s → qweight+scale: "
-            "%s → %s  (%.1f%% of bf16, %.1f bits/el)",
-            list(w.shape), list(qweight.shape), list(qweight_scale.shape),
-            ratio, ratio * 16 / 100,
+        logger.debug(
+            "Packed %s: %s → qweight %s + scale %s",
+            type(layer).__name__,
+            list(w.shape),
+            list(layer.qweight.shape),
+            list(layer.qweight_scale.shape),
         )
 
     def apply(
