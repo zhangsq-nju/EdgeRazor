@@ -13,7 +13,7 @@ from edgerazor.vllm.quant_ops import (
     IE_W4A8_BLOCK_SIZE,
     INT4_MAX,
     INT8_MAX,
-    W2A8_BLOCK_SIZE,
+    W1_58A8_BLOCK_SIZE,
     dequantize_weight,
     pack_int4,
     quantize_activation_per_block_int8,
@@ -23,7 +23,6 @@ from edgerazor.vllm.quant_ops import (
     resolve_quant_block,
     unpack_int4,
 )
-
 
 # ────────────────────────────────────────────────────────────
 # pack / unpack INT4
@@ -311,7 +310,7 @@ class TestTernaryToInt4:
         w = w.round()  # near-ternary
 
         qw, sc = quantize_weight_ternary_to_int4(w)
-        w_deq = dequantize_weight(qw, sc, block_size=W2A8_BLOCK_SIZE, out_dtype=torch.bfloat16)
+        w_deq = dequantize_weight(qw, sc, block_size=W1_58A8_BLOCK_SIZE, out_dtype=torch.bfloat16)
         cos_sim = torch.nn.functional.cosine_similarity(
             w_deq.flatten().float(), w.flatten().float(), dim=0,
         )

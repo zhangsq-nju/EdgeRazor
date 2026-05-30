@@ -14,8 +14,6 @@ Weight packing:
     → marlin_permute_scales
 """
 
-from __future__ import annotations
-
 import torch
 from torch.nn.parameter import Parameter
 from vllm import _custom_ops as ops
@@ -131,8 +129,12 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             gptq_qweight = gptq_qweight | (w_uint[:, :, i] << (4 * i))
         gptq_qweight = gptq_qweight.T.contiguous()  # (K/8, N)
 
-        # 4. Repack to Marlin tile-interleaved format
-        is_a8 = self.activation_bits == 8
+        # 4. Repack to Marlin tile-interleaved format.
+        #    EdgeRazor W4A8 activation-quant interacts poorly with Marlin's
+        #    INT8 path — the per-token scale / global-scale handling inside
+        #    the kernel produces garbled output.  Until that is root-caused,
+        #    force the well-tested W4A16 tile layout and let the GEMM run
+        #    in bf16×INT4 mode (identical accuracy to the pure-Python path).
         perm = torch.empty(0, dtype=torch.int32, device=w.device)
         qweight_marlin = ops.gptq_marlin_repack(
             gptq_qweight,
@@ -140,7 +142,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             size_k=K,
             size_n=N,
             num_bits=4,
-            is_a_8bit=is_a8,
+            is_a_8bit=False,
         )
 
         # 5. Permute scales for Marlin: (N, K/128) → (K/128, N)
@@ -150,7 +152,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             size_k=K,
             size_n=N,
             group_size=MARLIN_GROUP_SIZE,
-            is_a_8bit=is_a8,
+            is_a_8bit=False,
         )
 
         # 6. Replace params
@@ -202,7 +204,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             "(%.1f%% of bf16, %.1f bits/el, ER=%d→IE=%d)",
             self.quant_config.weight_bits,
             self.activation_bits,
-            list((N, K)),
+            [N, K],
             list(qweight_marlin.shape),
             list(scales_permuted.shape),
             ratio,

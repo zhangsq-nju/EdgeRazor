@@ -7,8 +7,6 @@ W4A8:  per-token INT8 quantize activation → dequantize back → bf16 matmul.
 No custom CUDA kernels — works on any GPU / CPU.
 """
 
-from __future__ import annotations
-
 import torch
 from torch.nn.parameter import Parameter
 from vllm.logger import init_logger

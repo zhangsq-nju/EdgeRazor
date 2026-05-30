@@ -32,6 +32,9 @@ logger = init_logger("vllm.edgerazor.quant")
 
 _BACKEND = None  # cached backend name for logging
 
+SUPPRTED_W_BITS = (4)
+SUPPRTED_A_BITS = (8, 16)
+
 
 @register_quantization_config("edgerazor")
 class EdgeRazorConfig(QuantizationConfig):
@@ -53,6 +56,16 @@ class EdgeRazorConfig(QuantizationConfig):
         modules_to_not_convert: list[str] | None = None,
     ) -> None:
         super().__init__()
+        if weight_bits not in SUPPRTED_W_BITS:
+            raise ValueError(
+                f"Unsupported weight_bits={weight_bits}. "
+                f"EdgeRazor supports: {SUPPRTED_W_BITS}"
+            )
+        if activation_bits not in SUPPRTED_A_BITS:
+            raise ValueError(
+                f"Unsupported activation_bits={activation_bits}. "
+                f"EdgeRazor supports: {SUPPRTED_A_BITS}"
+            )
         self.weight_bits = weight_bits
         self.activation_bits = activation_bits
         self.kv_cache_bits = kv_cache_bits
@@ -167,11 +180,19 @@ class EdgeRazorConfig(QuantizationConfig):
     # ── backend selection ────────────────────────────────────────
 
     def _select_backend(self):
-        """Select linear method backend based on GPU capability."""
+        """Select linear method backend based on GPU capability.
+
+        W4A16 → Marlin fused kernel (tested, fast).
+        W4A8  → pure-Python (Marlin's W4A8 INT8 activation path is
+                experimental in vLLM and interacts poorly with EdgeRazor's
+                dynamic per-token activation quantization).
+        """
         global _BACKEND
         from .linear_marlin import can_use_marlin
 
-        if can_use_marlin(self):
+        use_marlin = can_use_marlin(self) and self.activation_bits != 8
+
+        if use_marlin:
             if _BACKEND != "marlin":
                 _BACKEND = "marlin"
                 logger.info(
@@ -181,10 +202,14 @@ class EdgeRazorConfig(QuantizationConfig):
                 )
             return self._marlin_method()
         else:
-            if _BACKEND != "py":
-                _BACKEND = "py"
+            backend = "marlin→py (W4A8 unsupported)" if (
+                can_use_marlin(self) and self.activation_bits == 8
+            ) else "py"
+            if _BACKEND != backend:
+                _BACKEND = backend
                 logger.info(
-                    "[EdgeRazor] Backend: pure-Python (dequant + torch.matmul, W%dA%d)",
+                    "[EdgeRazor] Backend: pure-Python "
+                    "(dequant + torch.matmul, W%dA%d)",
                     self.weight_bits,
                     self.activation_bits,
                 )

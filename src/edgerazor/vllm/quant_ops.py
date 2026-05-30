@@ -11,8 +11,6 @@ Reference quant functions (from edgerazor.qat.util.quant_function):
   - state_quant_uniform_symmetric_absmax_per_token_int8
 """
 
-from __future__ import annotations
-
 import torch
 from torch import Tensor
 
@@ -35,19 +33,16 @@ INT8_MAX    = 127         # 2^(8-1) - 1
 # When ER <= IE, quantization runs directly at IE granularity.
 
 # EdgeRazor weight block sizes (used for training)
-ER_W2A8_BLOCK_SIZE = 256
+ER_W1_58A8_BLOCK_SIZE = 256
 ER_W4A8_BLOCK_SIZE = 256
-ER_W8A8_BLOCK_SIZE = 256
 
 # Inference engine weight block sizes (used for inference / packing)
-IE_W2A8_BLOCK_SIZE = 32
+IE_W1_58A8_BLOCK_SIZE = 32
 IE_W4A8_BLOCK_SIZE = 32
-IE_W8A8_BLOCK_SIZE = 32
 
 # ── Compat aliases (kept for external imports) ────────────────────
+W1_58A8_BLOCK_SIZE = ER_W1_58A8_BLOCK_SIZE
 W4A8_BLOCK_SIZE = ER_W4A8_BLOCK_SIZE
-W2A8_BLOCK_SIZE = ER_W2A8_BLOCK_SIZE
-W8A8_BLOCK_SIZE = ER_W8A8_BLOCK_SIZE
 
 # ──────────────────────────────────────────────
 # Pack / Unpack INT4
@@ -218,7 +213,7 @@ def quantize_activation_per_token_int8(
 
 def quantize_activation_per_block_int8(
     x: Tensor,
-    block_size: int = W2A8_BLOCK_SIZE,
+    block_size: int = W1_58A8_BLOCK_SIZE,
     epsilon: float = 1e-5,
 ) -> tuple[Tensor, Tensor]:
     """Dynamically quantize activation to INT8 per-block.
@@ -249,7 +244,7 @@ def quantize_activation_per_block_int8(
 
 def quantize_weight_ternary_to_int4(
     w: Tensor,
-    block_size: int = W2A8_BLOCK_SIZE,
+    block_size: int = W1_58A8_BLOCK_SIZE,
     w_scale_factor: float = 2.0,
     epsilon: float = 1e-5,
 ) -> tuple[Tensor, Tensor]:
