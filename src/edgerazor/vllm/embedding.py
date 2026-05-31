@@ -15,6 +15,7 @@ from vllm.model_executor.utils import set_weight_attrs
 
 from .quant_ops import (
     dequantize_weight,
+    quantize_activation_per_block_int8,
     quantize_weight_per_block_int4,
     quantize_weight_per_block_w2,
 )
@@ -68,7 +69,7 @@ class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
         if not getattr(layer, "_edgerazor_needs_pack", False):
             return
 
-        w = layer.weight.data.clone()  # clone to break tied-weight sharing
+        w = layer.weight.data
         orig_bytes = w.numel() * w.element_size()
 
         if self.weight_bits == 4:
@@ -119,10 +120,25 @@ class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        raise RuntimeError(
-            "EdgeRazorEmbeddingMethod.apply shoule never be called; "
-            "embedding layers use .embedding() instead.",
+        """Linear projection (lm_head when tie_word_embeddings=True).
+
+        vLLM sets ``self.lm_head = self.model.embed_tokens`` when weights
+        are tied, so the same ``EdgeRazorEmbeddingMethod`` must handle
+        both ``embedding()`` (lookup) and ``apply()`` (matmul).
+        """
+        w_deq = dequantize_weight(
+            layer.qweight,
+            layer.qweight_scale,
+            block_size=self.ie_block_size,
+            out_dtype=x.dtype,
+            weight_bits=self.weight_bits,
         )
+
+        if self.activation_bits == 8:
+            x_int, _x_scale = quantize_activation_per_block_int8(x)
+            x = x_int.to(x.dtype)
+
+        return torch.nn.functional.linear(x, w_deq, bias)
 
     def embedding(self, layer: torch.nn.Module, input_: torch.Tensor) -> torch.Tensor:
         return dequantize_weight(

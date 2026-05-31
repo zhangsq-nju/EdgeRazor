@@ -340,46 +340,60 @@ class EdgeRazorConfig(QuantizationConfig):
     def get_quant_method(
         self, layer: torch.nn.Module, prefix: str
     ) -> QuantizeMethodBase | None:
+        # ── decoder Linear layers ────────────────────────────────
         if isinstance(layer, LinearBase):
-            if not self._is_layer_quantized(prefix):
-                from vllm.model_executor.layers.linear import UnquantizedLinearMethod
+            return self._dispatch_linear(layer, prefix)
 
-                return UnquantizedLinearMethod()
-
-            wb = self._layer_weight_bits(prefix)
-            if wb not in SUPPORTED_W_BITS:
-                from vllm.model_executor.layers.linear import UnquantizedLinearMethod
-                return UnquantizedLinearMethod()
-
-            # Save layer name for process_weights_after_loading logging
-            layer._edgerazor_layer_name = prefix
-
-            if wb == self.weight_bits:
-                return self._select_backend()
-            return self._clone_with_weight_bits(wb)._select_backend()
-
+        # ── Embedding / LM head ───────────────────────────────────
         if isinstance(layer, VocabParallelEmbedding):
-            if self._is_layer_quantized(prefix):
-                wb = self._layer_weight_bits(prefix)
-                if wb in SUPPORTED_W_BITS:
-                    layer._edgerazor_layer_name = prefix
-                    if "lm_head" in prefix:
-                        # lm_head is a linear projection (hidden→vocab).
-                        # .clone() in process_weights_after_loading breaks
-                        # tied-weight sharing, so it can use a different
-                        # format from embed_tokens safely.
-                        if wb == self.weight_bits:
-                            return self._select_backend()
-                        return self._clone_with_weight_bits(wb)._select_backend()
-                    else:
-                        from .embedding import EdgeRazorEmbeddingMethod
-                        if wb == self.weight_bits:
-                            return EdgeRazorEmbeddingMethod(self)
-                        return EdgeRazorEmbeddingMethod(
-                            self._clone_with_weight_bits(wb)
-                        )
-            from vllm.model_executor.layers.vocab_parallel_embedding import (
-                UnquantizedEmbeddingMethod,
-            )
-            return UnquantizedEmbeddingMethod()
+            return self._dispatch_embedding(layer, prefix)
+
         return None
+
+    # ── per-type helpers ─────────────────────────────────────────
+
+    def _dispatch_linear(
+        self, layer: LinearBase, prefix: str
+    ) -> QuantizeMethodBase | None:
+        from vllm.model_executor.layers.linear import UnquantizedLinearMethod
+
+        if not self._is_layer_quantized(prefix):
+            return UnquantizedLinearMethod()
+
+        wb = self._layer_weight_bits(prefix)
+        if wb not in SUPPORTED_W_BITS:
+            return UnquantizedLinearMethod()
+
+        layer._edgerazor_layer_name = prefix
+        cfg = self if wb == self.weight_bits else self._clone_with_weight_bits(wb)
+        return cfg._select_backend()
+
+    def _dispatch_embedding(
+        self, layer: VocabParallelEmbedding, prefix: str
+    ) -> QuantizeMethodBase | None:
+        from vllm.model_executor.layers.vocab_parallel_embedding import (
+            UnquantizedEmbeddingMethod,
+        )
+
+        if not self._is_layer_quantized(prefix):
+            return UnquantizedEmbeddingMethod()
+
+        wb = self._layer_weight_bits(prefix)
+        if wb not in SUPPORTED_W_BITS:
+            return UnquantizedEmbeddingMethod()
+
+        layer._edgerazor_layer_name = prefix
+
+        # vLLM: type(self) is VocabParallelEmbedding distinguishes true
+        # embeddings from ParallelLMHead (subclass used as linear proj).
+        if type(layer) is not VocabParallelEmbedding:
+            # lm_head — route to linear backend (Marlin / Python)
+            cfg = self if wb == self.weight_bits else self._clone_with_weight_bits(wb)
+            return cfg._select_backend()
+
+        # embed_tokens — sparse-lookup embedding method.
+        # When tie_word_embeddings=True, vLLM sets lm_head = embed_tokens,
+        # so EdgeRazorEmbeddingMethod handles both .embedding() and .apply().
+        from .embedding import EdgeRazorEmbeddingMethod
+        cfg = self if wb == self.weight_bits else self._clone_with_weight_bits(wb)
+        return EdgeRazorEmbeddingMethod(cfg)

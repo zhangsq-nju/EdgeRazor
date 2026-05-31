@@ -95,7 +95,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         if not getattr(layer, "_edgerazor_needs_pack", False):
             return
 
-        w = layer.weight.data.clone()  # (N, K) bf16 — clone to break tied-weight sharing
+        w = layer.weight.data  # (N, K) bf16
         N, K = w.shape
         orig_bytes = w.numel() * w.element_size()
 
