@@ -242,7 +242,13 @@ class EdgeRazorConfig(QuantizationConfig):
         global _BACKEND
         from .linear_marlin import can_use_marlin
 
-        marlin_ok = can_use_marlin(self) and self.weight_bits in (1.58, 4)
+        # Marlin W4A8 / W1.58A8 kernel is experimental — route A8 to
+        # the Python backend which handles activation dequantization explicitly.
+        marlin_ok = (
+            can_use_marlin(self)
+            and self.weight_bits in (1.58, 4)
+            and self.activation_bits != 8
+        )
         preferred = self._user_backend
 
         # Resolve: user choice wins if compatible, else auto

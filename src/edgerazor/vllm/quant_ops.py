@@ -347,7 +347,7 @@ def quantize_activation_per_token_int8(
 
 def quantize_activation_per_block_int8(
     x: Tensor,
-    block_size: int = W1_58A8_BLOCK_SIZE,
+    block_size: int = IE_W1_58A8_BLOCK_SIZE,
     epsilon: float = 1e-5,
 ) -> tuple[Tensor, Tensor]:
     """Dynamically quantize activation to INT8 per-block.

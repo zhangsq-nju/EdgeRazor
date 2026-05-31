@@ -140,7 +140,9 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
         )
 
         if self.activation_bits == 8:
-            x_int, _x_scale = quantize_activation_per_block_int8(x)
-            x = x_int.to(x.dtype)
+            x_int, x_scale = quantize_activation_per_block_int8(x)
+            x = (x_int.float() * x_scale.repeat_interleave(
+                x.shape[-1] // x_scale.shape[-1], dim=-1,
+            ).float()).to(x.dtype)
 
         return torch.nn.functional.linear(x, w_deq, bias)

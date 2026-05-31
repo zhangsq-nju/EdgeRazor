@@ -29,6 +29,7 @@ class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
     def __init__(self, quant_config):
         self.quant_config = quant_config
         self.weight_bits = quant_config.weight_bits
+        self.activation_bits = quant_config.activation_bits
         self.ie_block_size = quant_config._scale_block_size
 
     # ── create_weights ───────────────────────────────────────────
@@ -135,8 +136,10 @@ class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
         )
 
         if self.activation_bits == 8:
-            x_int, _x_scale = quantize_activation_per_block_int8(x)
-            x = x_int.to(x.dtype)
+            x_int, x_scale = quantize_activation_per_block_int8(x)
+            x = (x_int.float() * x_scale.repeat_interleave(
+                x.shape[-1] // x_scale.shape[-1], dim=-1,
+            ).float()).to(x.dtype)
 
         return torch.nn.functional.linear(x, w_deq, bias)
 
