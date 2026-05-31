@@ -3,14 +3,16 @@ EdgeRazor Marlin-kernel linear method for vLLM.
 
 Requires CUDA GPU with compute capability >= 7.5 (Turing).
 
-W4A16:  fused INT4 dequant + bf16 matmul via Marlin GEMM.
-W4A8:   fused INT4 dequant + INT8 matmul via Marlin GEMM.
+W4A16:   fused INT4 dequant + bf16 matmul via Marlin GEMM.
+W4A8:    fused INT4 dequant + INT8 matmul via Marlin GEMM.
+W1.58A16: ternary {-1,0,1} → uint4b8 → Marlin W4 pipeline (upcast).
+W1.58A8:  ternary → uint4b8 → Marlin W4A8 pipeline (upcast).
 
-Weight packing:
+Weight packing (shared across all bit-widths):
   bf16 (N,K)
-    → per-block INT4 quantize (ER block → split to IE=128)
+    → per-block quantize (ER block → split to IE=128)
     → GPTQ row-packed int32 (K/8, N)
-    → gptq_marlin_repack → Marlin tile-interleaved (K/16, N*8)
+    → gptq_marlin_repack → Marlin tile-interleaved
     → marlin_permute_scales
 """
 
@@ -29,7 +31,7 @@ from vllm.model_executor.utils import set_weight_attrs
 from vllm.platforms import current_platform
 from vllm.scalar_type import scalar_types
 
-from .quant_ops import INT4_MAX
+from .quant_ops import INT1_58_MAX, INT4_MAX
 
 logger = init_logger("vllm.edgerazor.marlin")
 
@@ -37,14 +39,18 @@ logger = init_logger("vllm.edgerazor.marlin")
 # that evenly divides EdgeRazor's ER block of 256).
 MARLIN_GROUP_SIZE = 128
 
+# W1.58 ternary clip scale factor (mean-abs multiplier from EdgeRazor training).
+W1_58_SCALE_FACTOR = 2.0
+
 
 class EdgeRazorMarlinLinearMethod(LinearMethodBase):
-    """Marlin-kernel W4A16 / W4A8 linear method."""
+    """Marlin-kernel W4A16 / W4A8 / W1.58A16 / W1.58A8 linear method."""
 
     def __init__(self, quant_config):
         self.quant_config = quant_config
         self.er_block_size = quant_config._quant_block_size
         self.activation_bits = quant_config.activation_bits
+        self.weight_bits = quant_config.weight_bits
         self._forward_fn = None  # cached from first apply
 
     # ── create_weights ───────────────────────────────────────────
@@ -99,30 +105,39 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
                 f"group_size ({MARLIN_GROUP_SIZE})"
             )
 
-        # 1. Per-block INT4 quantize (ER block)
+        # 1. Per-block quantize (ER block)
         er = self.er_block_size
         w_blocks = w.view(N, -1, er)
-        w_scale_er = (
-            w_blocks.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5) / INT4_MAX
-        )
-        w_int = (
-            (w_blocks / w_scale_er).round().clamp(-INT4_MAX, INT4_MAX).to(torch.int8)
-        )
-        w_int_flat = w_int.view(N, K)  # (N, K)  int8  [-7, 7]
 
-        # 2. Split scales: ER=256 → IE=128 (Marlin group_size)
+        if self.weight_bits == 4:
+            w_scale_er = (
+                w_blocks.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5) / INT4_MAX
+            )
+            int_max = INT4_MAX
+        elif self.weight_bits == 1:
+            # Ternary: clip-method scale = mean(|w|) * w_scale_factor
+            w_scale_er = (
+                w_blocks.abs().mean(dim=-1, keepdim=True)
+                .mul_(W1_58_SCALE_FACTOR).clamp(min=1e-5)
+            )
+            int_max = INT1_58_MAX  # 1 → clamp to {-1, 0, 1}
+        else:
+            raise ValueError(f"Unsupported weight_bits={self.weight_bits}")
+
+        w_int = (
+            (w_blocks / w_scale_er).round().clamp(-int_max, int_max).to(torch.int8)
+        )
+        w_int_flat = w_int.view(N, K)  # (N, K)  int8
+
+        # 2. Split scales: ER → IE (Marlin group_size)
         assert er % MARLIN_GROUP_SIZE == 0
         n_split = er // MARLIN_GROUP_SIZE
         w_scale = w_scale_er.squeeze(-1).repeat_interleave(n_split, dim=1)
         # w_scale: (N, K/128)  bf16
 
         # 3. Pack to GPTQ row-packed int32: (K/8, N)
-        #    Signed int4 [-7,7] → unsigned uint4b8 [1,15] via bias +8.
-        #    Each int32 packs 8 consecutive uint4 along K (row-packed).
-        #    Explicit bitwise accumulation avoids relying on sum() dtype
-        #    preservation (int32 sum can promote to int64 on some PyTorch
-        #    builds, triggering "b_q_weight type is not kInt" in the C++
-        #    Marlin repack kernel).
+        #    Both W4 [-7,7] and W1.58 {-1,0,1} → uint4b8 [1,15] via bias +8.
+        #    Ternary values {7,8,9} are a proper subset of the valid uint4b8 range.
         w_uint = (w_int_flat + 8).to(torch.int32).view(N, -1, 8)  # (N, K/8, 8)
         gptq_qweight = torch.zeros(N, K // 8, dtype=torch.int32, device=w.device)
         for i in range(8):
@@ -130,11 +145,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         gptq_qweight = gptq_qweight.T.contiguous()  # (K/8, N)
 
         # 4. Repack to Marlin tile-interleaved format.
-        #    EdgeRazor W4A8 activation-quant interacts poorly with Marlin's
-        #    INT8 path — the per-token scale / global-scale handling inside
-        #    the kernel produces garbled output.  Until that is root-caused,
-        #    force the well-tested W4A16 tile layout and let the GEMM run
-        #    in bf16×INT4 mode (identical accuracy to the pure-Python path).
+        is_a8 = self.activation_bits == 8
         perm = torch.empty(0, dtype=torch.int32, device=w.device)
         qweight_marlin = ops.gptq_marlin_repack(
             gptq_qweight,
@@ -142,7 +153,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             size_k=K,
             size_n=N,
             num_bits=4,
-            is_a_8bit=False,
+            is_a_8bit=is_a8,
         )
 
         # 5. Permute scales for Marlin: (N, K/128) → (K/128, N)
@@ -152,7 +163,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             size_k=K,
             size_n=N,
             group_size=MARLIN_GROUP_SIZE,
-            is_a_8bit=False,
+            is_a_8bit=is_a8,
         )
 
         # 6. Replace params
@@ -202,7 +213,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         logger.info(
             "[EdgeRazor MARLIN] W%dA%d, packed %s → Marlin %s / %s  "
             "(%.1f%% of bf16, %.1f bits/el, ER=%d→IE=%d)",
-            self.quant_config.weight_bits,
+            self.weight_bits,
             self.activation_bits,
             [N, K],
             list(qweight_marlin.shape),
@@ -221,11 +232,10 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        # Always use W4-A16 with Marlin kernel.
-        # The Marlin W4A8 activation quant path (input_dtype=torch.int8)
-        # interacts poorly with EdgeRazor's dynamic per-token INT8 scheme
-        # and produces garbled output. W4A16 is the well-tested path and
-        # matches the pure-Python backend behavior.
+        use_a8 = self.activation_bits == 8
+        input_dtype = torch.int8 if use_a8 else None
+        input_global_scale = getattr(layer, "input_global_scale", None) if use_a8 else None
+
         return apply_gptq_marlin_linear(
             input=x,
             weight=layer.qweight,
@@ -239,8 +249,8 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
             input_size_per_partition=self.input_size_per_partition,
             is_k_full=True,
             bias=bias,
-            input_global_scale=None,
-            input_dtype=None,
+            input_global_scale=input_global_scale,
+            input_dtype=input_dtype,
         )
 
 

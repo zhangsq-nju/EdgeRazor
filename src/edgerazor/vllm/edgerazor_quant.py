@@ -23,7 +23,9 @@ from vllm.model_executor.layers.quantization.base_config import (
 from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
 
 from .quant_ops import (
+    ER_W1_58A8_BLOCK_SIZE,
     ER_W4A8_BLOCK_SIZE,
+    IE_W1_58A8_BLOCK_SIZE,
     IE_W4A8_BLOCK_SIZE,
     resolve_quant_block,
 )
@@ -32,13 +34,15 @@ logger = init_logger("vllm.edgerazor.quant")
 
 _BACKEND = None  # cached backend name for logging
 
-SUPPRTED_W_BITS = (4)
+SUPPRTED_W_BITS = (1, 4)
 SUPPRTED_A_BITS = (8, 16)
 
 
 @register_quantization_config("edgerazor")
 class EdgeRazorConfig(QuantizationConfig):
-    """Quantization config for EdgeRazor W4 models.
+    """Quantization config for EdgeRazor quantized models.
+
+    Supports W1.58 (ternary) and W4 (INT4) weight quantization.
 
     Auto-detected via ``edgerazor_qconfig`` in config.json or explicit
     ``--quantization edgerazor``.
@@ -48,8 +52,8 @@ class EdgeRazorConfig(QuantizationConfig):
         self,
         weight_bits: int = 4,
         weight_block_size: int | list[int] | None = None,
-        er_block_size: int = ER_W4A8_BLOCK_SIZE,
-        ie_block_size: int = IE_W4A8_BLOCK_SIZE,
+        er_block_size: int | None = None,
+        ie_block_size: int | None = None,
         activation_bits: int = 16,
         kv_cache_bits: int = 16,
         quant_mode: str = "",
@@ -71,6 +75,16 @@ class EdgeRazorConfig(QuantizationConfig):
         self.kv_cache_bits = kv_cache_bits
         self.quant_mode = quant_mode
         self.modules_to_not_convert = modules_to_not_convert or []
+
+        # Default ER / IE block sizes per weight bit-width
+        if er_block_size is None:
+            er_block_size = (
+                ER_W1_58A8_BLOCK_SIZE if weight_bits == 1 else ER_W4A8_BLOCK_SIZE
+            )
+        if ie_block_size is None:
+            ie_block_size = (
+                IE_W1_58A8_BLOCK_SIZE if weight_bits == 1 else IE_W4A8_BLOCK_SIZE
+            )
 
         # Resolve block sizes
         if weight_block_size is None:
@@ -130,10 +144,11 @@ class EdgeRazorConfig(QuantizationConfig):
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "EdgeRazorConfig":
         """Create config from a model's ``quantization_config`` dict."""
+        weight_bits = config.get("weight_bits", 4)
         return cls(
-            weight_bits=config.get("weight_bits", 4),
-            er_block_size=config.get("er_block_size", ER_W4A8_BLOCK_SIZE),
-            ie_block_size=config.get("ie_block_size", IE_W4A8_BLOCK_SIZE),
+            weight_bits=weight_bits,
+            er_block_size=config.get("er_block_size"),
+            ie_block_size=config.get("ie_block_size"),
             activation_bits=config.get("activation_bits", 16),
             kv_cache_bits=config.get("kv_cache_bits", 16),
             quant_mode=config.get("quant_mode", ""),
@@ -182,15 +197,13 @@ class EdgeRazorConfig(QuantizationConfig):
     def _select_backend(self):
         """Select linear method backend based on GPU capability.
 
-        W4A16 → Marlin fused kernel (tested, fast).
-        W4A8  → pure-Python (Marlin's W4A8 INT8 activation path is
-                experimental in vLLM and interacts poorly with EdgeRazor's
-                dynamic per-token activation quantization).
+        W4A16 / W4A8 / W1.58A16 / W1.58A8 → Marlin (W1.58 upcast to W4).
+        Falls back to pure-Python on older GPUs or CPU.
         """
         global _BACKEND
         from .linear_marlin import can_use_marlin
 
-        use_marlin = can_use_marlin(self) and self.activation_bits != 8
+        use_marlin = can_use_marlin(self) and self.weight_bits in (1, 4)
 
         if use_marlin:
             if _BACKEND != "marlin":
@@ -202,11 +215,8 @@ class EdgeRazorConfig(QuantizationConfig):
                 )
             return self._marlin_method()
         else:
-            backend = "marlin→py (W4A8 unsupported)" if (
-                can_use_marlin(self) and self.activation_bits == 8
-            ) else "py"
-            if _BACKEND != backend:
-                _BACKEND = backend
+            if _BACKEND != "py":
+                _BACKEND = "py"
                 logger.info(
                     "[EdgeRazor] Backend: pure-Python "
                     "(dequant + torch.matmul, W%dA%d)",

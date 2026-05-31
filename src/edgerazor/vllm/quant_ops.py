@@ -1,13 +1,14 @@
 """
 Pure quantization operations — no vLLM dependency.
 
-These functions implement the EdgeRazor per-block INT4 weight quantization
-format, which is compatible with GGUF Q4_0:
+EdgeRazor per-block weight quantization formats:
 
-  All schemes: block_size=256, symmetric absmax per-block, 2×INT4 packed per uint8
+  W4  (INT4):  block_size=256, symmetric absmax, 2×INT4 per uint8
+  W1.58 (W2):   block_size=256, clip (mean-abs), 4×INT2 per uint8
 
 Reference quant functions (from edgerazor.qat.util.quant_function):
   - weight_quant_uniform_symmetric_absmax_per_block_int4
+  - weight_quant_uniform_symmetric_clip_per_block_int1_58
   - state_quant_uniform_symmetric_absmax_per_token_int8
 """
 
@@ -34,15 +35,15 @@ INT8_MAX    = 127         # 2^(8-1) - 1
 
 # EdgeRazor weight block sizes (used for training)
 ER_W1_58A8_BLOCK_SIZE = 256
-ER_W4A8_BLOCK_SIZE = 256
+ER_W4A8_BLOCK_SIZE    = 256
 
 # Inference engine weight block sizes (used for inference / packing)
 IE_W1_58A8_BLOCK_SIZE = 32
-IE_W4A8_BLOCK_SIZE = 32
+IE_W4A8_BLOCK_SIZE    = 32
 
 # ── Compat aliases (kept for external imports) ────────────────────
 W1_58A8_BLOCK_SIZE = ER_W1_58A8_BLOCK_SIZE
-W4A8_BLOCK_SIZE = ER_W4A8_BLOCK_SIZE
+W4A8_BLOCK_SIZE    = ER_W4A8_BLOCK_SIZE
 
 # ──────────────────────────────────────────────
 # Pack / Unpack INT4
@@ -82,6 +83,54 @@ def unpack_int4(qweight: Tensor) -> Tensor:
     even = ((qweight >> 4) & 0x0F).to(torch.int8) - 8
     odd = (qweight & 0x0F).to(torch.int8) - 8
     return torch.stack([even, odd], dim=-1).flatten(-2)
+
+
+# ──────────────────────────────────────────────
+# Pack / Unpack INT2 (W1.58-A8 ternary → 2-bit)
+# ──────────────────────────────────────────────
+
+def pack_w2(w_int: Tensor) -> Tensor:
+    """Pack signed INT2 values { -2, -1, 0, 1 } → uint8 (4 values per byte).
+
+    Each group of 4 adjacent INT2 values ``[a, b, c, d]`` along the last
+    dimension is packed as::
+
+        byte = (a+2) | ((b+2) << 2) | ((c+2) << 4) | ((d+2) << 6)
+
+    The ``+2`` offset shifts [-2, 1] to [0, 3] for unsigned 2-bit storage.
+    For ternary values { -1, 0, 1 }, the stored values are {1, 2, 3}.
+
+    Args:
+        w_int: signed INT8 tensor with values in [-2, 1], last dim is a
+               multiple of 4.
+
+    Returns:
+        Packed uint8 tensor, last dim quartered.
+    """
+    w_shifted = (w_int + 2).to(torch.uint8)  # [-2,1] → [0,3]
+    v0 = w_shifted[..., 0::4]
+    v1 = w_shifted[..., 1::4]
+    v2 = w_shifted[..., 2::4]
+    v3 = w_shifted[..., 3::4]
+    return v0 | (v1 << 2) | (v2 << 4) | (v3 << 6)
+
+
+def unpack_w2(qweight: Tensor) -> Tensor:
+    """Unpack uint8 (..., block_size//4) → signed INT8 (..., block_size).
+
+    Reverses :func:`pack_w2`.  Values are returned in [-2, 1].
+
+    Args:
+        qweight: packed uint8 tensor.
+
+    Returns:
+        Unpacked signed INT8 tensor with values in [-2, 1], last dim quadrupled.
+    """
+    v0 = (qweight & 0x03).to(torch.int8) - 2
+    v1 = ((qweight >> 2) & 0x03).to(torch.int8) - 2
+    v2 = ((qweight >> 4) & 0x03).to(torch.int8) - 2
+    v3 = ((qweight >> 6) & 0x03).to(torch.int8) - 2
+    return torch.stack([v0, v1, v2, v3], dim=-1).flatten(-2)
 
 
 # ──────────────────────────────────────────────
@@ -159,33 +208,127 @@ def quantize_weight_per_block_int4(
     return qweight, qweight_scale
 
 
+# ──────────────────────────────────────────────
+# Dequantize weight dispatcher
+# ──────────────────────────────────────────────
+
 def dequantize_weight(
     qweight: Tensor,
     qweight_scale: Tensor,
     block_size: int = IE_W4A8_BLOCK_SIZE,
     out_dtype: torch.dtype = torch.bfloat16,
+    weight_bits: int = 4,
 ) -> Tensor:
-    """Dequantize per-block INT4 weights to the target dtype.
+    """Dequantize per-block quantized weights to the target dtype.
 
-    *block_size* must match the *ie_block_size* used during packing
-    (i.e. the stored scale granularity, not the training ER size).
+    *block_size* must match the *ie_block_size* used during packing.
 
     Args:
-        qweight: packed uint8 ``(out_dim, in_dim // 2)``.
-        qweight_scale: bf16 ``(out_dim, in_dim // block_size)``.
-        block_size: inference scale block size (default IE_W4A8_BLOCK_SIZE).
+        qweight: packed uint8.
+        qweight_scale: bf16 scale tensor.
+        block_size: inference scale block size.
         out_dtype: target dtype for dequantized weight.
+        weight_bits: weight bit-width (4 for INT4, 1 for W1.58 ternary).
 
     Returns:
         Dequantized weight tensor ``(out_dim, in_dim)``.
     """
-    w_int = unpack_int4(qweight)  # (out, in) int8
-    scale = qweight_scale.repeat_interleave(block_size, dim=1)  # (out, in)
+    if weight_bits == 4:
+        w_int = unpack_int4(qweight)
+    elif weight_bits == 1:
+        w_int = unpack_w2(qweight)
+    else:
+        raise ValueError(f"Unsupported weight_bits={weight_bits}")
+    scale = qweight_scale.repeat_interleave(block_size, dim=1)
     return (w_int.float() * scale.float()).to(out_dtype)
 
 
 # ──────────────────────────────────────────────
-# Activation quantization (per-token INT8)
+# Weight quantization for 1.58-bit (ternary → W2 pack)
+# ──────────────────────────────────────────────
+
+def quantize_weight_per_block_w2(
+    w: Tensor,
+    er_block_size: int = ER_W1_58A8_BLOCK_SIZE,
+    ie_block_size: int = IE_W1_58A8_BLOCK_SIZE,
+    w_scale_factor: float = 2.0,
+    epsilon: float = 1e-5,
+) -> tuple[Tensor, Tensor]:
+    """Quantize bf16/fp16 weight to ternary {-1, 0, 1}, packed as W2.
+
+    Uses the clip method (mean-abs scale) from EdgeRazor training,
+    equivalent to ``weight_quant_uniform_symmetric_clip_per_block_int1_58``.
+
+    Args:
+        w: weight tensor, shape ``(out_dim, in_dim)``.
+        er_block_size: EdgeRazor training block size (default 256).
+        ie_block_size: inference engine packing block size (default 32).
+        w_scale_factor: multiplier for mean abs value (default 2.0).
+        epsilon: minimum scale to avoid division by zero.
+
+    Returns:
+        ``(qweight, qweight_scale)`` where:
+          - ``qweight``: packed uint8 ``(out_dim, in_dim // 4)``
+          - ``qweight_scale``: bf16 ``(out_dim, in_dim // ie_block_size)``
+    """
+    out_dim, in_dim = w.shape
+    quant_block, scale_block, needs_split = resolve_quant_block(
+        er_block_size, ie_block_size,
+    )
+
+    w_blocks = w.view(out_dim, -1, quant_block)
+
+    # Per-block clip scale (mean-abs method from EdgeRazor training)
+    w_scale = (
+        w_blocks.abs().mean(dim=-1, keepdim=True)
+        .mul_(w_scale_factor).clamp(min=epsilon)
+    )
+
+    # Ternarize to {-1, 0, 1}
+    w_ternary = (w_blocks / w_scale).round().clamp(-1, 1).to(torch.int8)
+    qweight = pack_w2(w_ternary.view(out_dim, -1))
+
+    if needs_split:
+        n = er_block_size // ie_block_size
+        w_scale = w_scale.squeeze(-1).repeat_interleave(n, dim=1)
+
+    qweight_scale = w_scale.squeeze(-1).contiguous().to(torch.bfloat16)
+    return qweight, qweight_scale
+
+
+# ── Legacy wrapper (ternary → INT4 pack, for backwards compat) ────
+
+def quantize_weight_ternary_to_int4(
+    w: Tensor,
+    block_size: int = W1_58A8_BLOCK_SIZE,
+    w_scale_factor: float = 2.0,
+    epsilon: float = 1e-5,
+) -> tuple[Tensor, Tensor]:
+    """Quantize ternary (1.58-bit) weights to per-block INT4 (legacy).
+
+    Prefer :func:`quantize_weight_per_block_w2` for new code — it packs
+    4 ternary values per byte instead of 2, halving memory usage.
+
+    Returns ``(qweight, qweight_scale)`` in INT4-packed format, compatible
+    with ``dequantize_weight(qweight, qweight_scale, weight_bits=4)``.
+    """
+    out_dim, in_dim = w.shape
+    w_blocks = w.view(out_dim, -1, block_size)
+
+    w_scale = (
+        w_blocks.abs().mean(dim=-1, keepdim=True)
+        .mul_(w_scale_factor).clamp(min=epsilon)
+    )
+
+    w_ternary = (w_blocks / w_scale).round().clamp(-1, 1)
+    qweight = pack_int4(w_ternary.view(out_dim, -1).to(torch.int8))
+    qweight_scale = w_scale.squeeze(-1).contiguous().to(torch.bfloat16)
+
+    return qweight, qweight_scale
+
+
+# ──────────────────────────────────────────────
+# Activation quantization (per-token / per-block INT8)
 # ──────────────────────────────────────────────
 
 def quantize_activation_per_token_int8(
@@ -196,15 +339,6 @@ def quantize_activation_per_token_int8(
 
     Quantizes along the last dimension (per-token). Equivalent to
     ``state_quant_uniform_symmetric_absmax_per_token_int8``.
-
-    Args:
-        x: activation tensor, shape ``([batch,] seq_len, hidden_dim)``.
-        epsilon: minimum scale to avoid division by zero.
-
-    Returns:
-        ``(x_quant, x_scale)`` where:
-          - ``x_quant``: INT8 tensor ``(..., hidden_dim)``
-          - ``x_scale``: per-token scale, same shape prefix, last dim = 1
     """
     x_scale = x.abs().amax(dim=-1, keepdim=True).clamp(min=epsilon) / INT8_MAX
     x_int = (x / x_scale).round().clamp(-INT8_MAX, INT8_MAX).to(torch.int8)
@@ -220,63 +354,9 @@ def quantize_activation_per_block_int8(
 
     Divides the last dimension into blocks and quantizes each separately.
     Equivalent to ``state_quant_uniform_symmetric_absmax_per_block_int8``.
-
-    Args:
-        x: activation tensor, shape ``([batch,] seq_len, hidden_dim)``.
-        block_size: group size per block (default 256, matching W2A8).
-        epsilon: minimum scale to avoid division by zero.
-
-    Returns:
-        ``(x_quant, x_scale)`` where:
-          - ``x_quant``: INT8 tensor, same shape as ``x``
-          - ``x_scale``: per-block scale, expanded last dim into nblocks
     """
     shape = x.shape
     x_blocks = x.view(*shape[:-1], -1, block_size)
     x_scale = x_blocks.abs().amax(dim=-1, keepdim=True).clamp(min=epsilon) / INT8_MAX
     x_int = (x_blocks / x_scale).round().clamp(-INT8_MAX, INT8_MAX).to(torch.int8)
     return x_int.view(shape), x_scale.squeeze(-1)
-
-
-# ──────────────────────────────────────────────
-# Weight packing for 1.58-bit (ternary → degraded to 4-bit)
-# ──────────────────────────────────────────────
-
-def quantize_weight_ternary_to_int4(
-    w: Tensor,
-    block_size: int = W1_58A8_BLOCK_SIZE,
-    w_scale_factor: float = 2.0,
-    epsilon: float = 1e-5,
-) -> tuple[Tensor, Tensor]:
-    """Quantize ternary (1.58-bit) weights to per-block INT4.
-
-    The 1.58-bit weight uses clip method: scale = mean(|w|) * w_scale_factor.
-    Values are ternarized to {-1, 0, 1} then packed as 4-bit for inference.
-
-    Equivalent to ``weight_quant_uniform_symmetric_clip_per_block_int1_58``
-    but repacked into INT4 format.
-
-    Args:
-        w: weight tensor, shape ``(out_dim, in_dim)``.
-        block_size: group size (default 256 for W2A8).
-        w_scale_factor: multiplier for mean abs value (default 2.0).
-        epsilon: minimum scale to avoid division by zero.
-
-    Returns:
-        ``(qweight, qweight_scale)`` packed as INT4 format (compatible with
-        the same dequantize_weight function).
-    """
-    out_dim, in_dim = w.shape
-    w_blocks = w.view(out_dim, -1, block_size)
-
-    # Per-block clip scale (mean-abs method)
-    w_scale = w_blocks.abs().mean(dim=-1, keepdim=True).mul_(w_scale_factor).clamp(min=epsilon)
-
-    # Ternarize to {-1, 0, 1}
-    w_ternary = (w_blocks / w_scale).round().clamp(-1, 1)
-
-    # Repack as INT4 (ternary values fit in 4-bit)
-    qweight = pack_int4(w_ternary.view(out_dim, -1).to(torch.int8))
-    qweight_scale = w_scale.squeeze(-1).contiguous().to(torch.bfloat16)
-
-    return qweight, qweight_scale

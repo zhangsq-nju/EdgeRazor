@@ -1,4 +1,4 @@
-"""EdgeRazor vLLM Plugin — W4-A16 / W4-A8 quantized inference.
+"""EdgeRazor vLLM Plugin — W1.58-A8 / W1.58-A16 / W4-A16 / W4-A8 quantized inference.
 
 Auto-registered with vLLM via ``@register_quantization_config("edgerazor")``.
 
@@ -8,8 +8,8 @@ Auto-registered with vLLM via ``@register_quantization_config("edgerazor")``.
     vllm serve /path/to/model --quantization edgerazor
 
 Backends (auto-selected):
-  - ``linear_marlin.py``  —  CUDA sm>=75, fused Marlin GEMM kernel
-  - ``linear_py.py``      —  pure-Python dequant + torch.matmul (fallback)
+  - ``linear_marlin.py``  —  CUDA sm>=75, fused Marlin GEMM kernel (W4 only)
+  - ``linear_py.py``      —  pure-Python dequant + torch.matmul (fallback / W1.58)
 """
 
 # ── Pure quant ops (no vLLM dependency) ─────────────────────────
@@ -17,36 +17,38 @@ Backends (auto-selected):
 from .quant_ops import (
     ER_W1_58A8_BLOCK_SIZE,
     ER_W4A8_BLOCK_SIZE,
-    ER_W8A8_BLOCK_SIZE,
-    IE_W2A8_BLOCK_SIZE,
+    IE_W1_58A8_BLOCK_SIZE,
     IE_W4A8_BLOCK_SIZE,
-    IE_W8A8_BLOCK_SIZE,
     INT1_58_MAX,
     INT4_MAX,
     INT8_MAX,
     W1_58A8_BLOCK_SIZE,
     W4A8_BLOCK_SIZE,
-    W8A8_BLOCK_SIZE,
     dequantize_weight,
     pack_int4,
+    pack_w2,
     quantize_activation_per_block_int8,
     quantize_activation_per_token_int8,
     quantize_weight_per_block_int4,
+    quantize_weight_per_block_w2,
     quantize_weight_ternary_to_int4,
     resolve_quant_block,
     unpack_int4,
+    unpack_w2,
 )
 
 __all__ = [
     # Pure ops
-    "dequantize_weight", "pack_int4", "unpack_int4",
-    "quantize_weight_per_block_int4", "quantize_weight_ternary_to_int4",
+    "dequantize_weight",
+    "pack_int4", "unpack_int4", "pack_w2", "unpack_w2",
+    "quantize_weight_per_block_int4", "quantize_weight_per_block_w2",
+    "quantize_weight_ternary_to_int4",
     "quantize_activation_per_token_int8", "quantize_activation_per_block_int8",
     "resolve_quant_block",
     # Block-size constants
-    "ER_W1_58A8_BLOCK_SIZE", "ER_W4A8_BLOCK_SIZE", "ER_W8A8_BLOCK_SIZE",
-    "IE_W2A8_BLOCK_SIZE", "IE_W4A8_BLOCK_SIZE", "IE_W8A8_BLOCK_SIZE",
-    "W1_58A8_BLOCK_SIZE", "W4A8_BLOCK_SIZE", "W8A8_BLOCK_SIZE",
+    "ER_W1_58A8_BLOCK_SIZE", "ER_W4A8_BLOCK_SIZE",
+    "IE_W1_58A8_BLOCK_SIZE", "IE_W4A8_BLOCK_SIZE",
+    "W1_58A8_BLOCK_SIZE", "W4A8_BLOCK_SIZE",
     "INT1_58_MAX", "INT4_MAX", "INT8_MAX",
     # Plugin
     "register", "EdgeRazorConfig",
