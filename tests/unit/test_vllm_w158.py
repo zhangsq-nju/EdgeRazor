@@ -228,11 +228,12 @@ class TestW1vsW4Framework:
         )
         assert s158.shape == s4.shape  # (N, K/32)
 
-    def test_resolve_quant_block_same_for_both(self):
-        """resolve_quant_block gives the same result for both bit-widths."""
+    def test_resolve_quant_block_er_consistent(self):
+        """resolve_quant_block quant_block is always ER when ER > IE."""
         r158 = resolve_quant_block(ER_W1_58A8_BLOCK_SIZE, IE_W1_58A8_BLOCK_SIZE)
         r4 = resolve_quant_block(ER_W4A8_BLOCK_SIZE, IE_W4A8_BLOCK_SIZE)
-        assert r158 == r4  # Both ER=256, IE=32
+        # quant_block should be ER=256 for both, regardless of IE
+        assert r158[0] == r4[0] == 256
 
     def test_W1_quant_preserves_W4_pipeline(self):
         """W1.58 quantized values pass through the same unpack_int4 as W4."""
@@ -252,11 +253,15 @@ class TestW1vsW4Framework:
         torch.manual_seed(42)
         w = torch.randn(4, 512, dtype=torch.bfloat16)
 
-        q158, s158 = quantize_weight_per_block_w2(w)
-        q4, s4 = quantize_weight_per_block_int4(w)
+        q158, s158 = quantize_weight_per_block_w2(
+            w, er_block_size=256, ie_block_size=256,
+        )
+        q4, s4 = quantize_weight_per_block_int4(
+            w, er_block_size=256, ie_block_size=256,
+        )
 
-        w158_deq = dequantize_weight(q158, s158, block_size=32, weight_bits=1.58)
-        w4_deq = dequantize_weight(q4, s4, block_size=32, weight_bits=4)
+        w158_deq = dequantize_weight(q158, s158, block_size=256, weight_bits=1.58)
+        w4_deq = dequantize_weight(q4, s4, block_size=256, weight_bits=4)
 
         # Both should be roughly similar to original weight
         # (W4 should be more accurate → lower MSE)
@@ -342,6 +347,117 @@ class TestTernaryBlockSplit:
             f"Dequantized weight differs with different IE: "
             f"max_diff={(w32 - w256).abs().max()}"
         )
+
+
+# ────────────────────────────────────────────────────────────
+# Marlin IE cap — degrade when IE exceeds Marlin max (128)
+# ────────────────────────────────────────────────────────────
+
+MARLIN_MAX_GROUP_SIZE = 128
+
+
+class TestMarlinIECap:
+    """IE block_size auto-capped to Marlin's max group_size."""
+
+    def _effective_ie(self, ie: int) -> int:
+        return min(ie, MARLIN_MAX_GROUP_SIZE)
+
+    def _quantize_marlin_style(self, w, er, ie):
+        """Simulate Marlin's process_weights_after_loading quant logic."""
+        ie_eff = self._effective_ie(ie)
+        from edgerazor.vllm.quant_ops import (
+            INT1_58_MAX,
+            INT4_MAX,
+            quantize_weight_per_block_int4,
+            quantize_weight_per_block_w2,
+        )
+        # W4: absmax scale, W1.58: clip scale
+        if ie_eff >= 128:
+            return quantize_weight_per_block_int4(
+                w, er_block_size=er, ie_block_size=ie_eff,
+            )
+        else:
+            return quantize_weight_per_block_int4(
+                w, er_block_size=er, ie_block_size=ie_eff,
+            )
+
+    @pytest.mark.parametrize("er, ie, expected_ie", [
+        (256, 256, 128),
+        (256, 512, 128),
+        (256, 128, 128),
+        (256, 64, 64),
+        (256, 32, 32),
+    ])
+    def test_ie_capped_to_max(self, er, ie, expected_ie):
+        """IE > Marlin max (128) → capped at 128; smaller → unchanged."""
+        assert self._effective_ie(ie) == expected_ie
+
+    def test_quantize_ie256_vs_ie128_same_dequant(self):
+        """IE=256 capped to 128 produces same dequantized weights."""
+        torch.manual_seed(42)
+        w = torch.randn(4, 512, dtype=torch.bfloat16)
+        er = 256
+
+        q256, s256 = quantize_weight_per_block_int4(
+            w, er_block_size=er, ie_block_size=256,
+        )
+        q128, s128 = quantize_weight_per_block_int4(
+            w, er_block_size=er, ie_block_size=128,
+        )
+
+        # IE=256 stored at coarser granularity; IE=128 duplicates scales
+        w256 = dequantize_weight(q256, s256, block_size=256, weight_bits=4)
+        w128 = dequantize_weight(q128, s128, block_size=128, weight_bits=4)
+        # Both use same ER → same int values → bit-exact after dequant
+        assert torch.equal(w256, w128), (
+            f"max_diff={(w256 - w128).abs().max()}"
+        )
+
+    def test_w158_ie256_vs_ie128_same_dequant(self):
+        """W1.58 IE=256 vs IE=128: same dequantized weights."""
+        torch.manual_seed(42)
+        w = torch.randn(4, 512, dtype=torch.bfloat16)
+        er = 256
+
+        qw256, s256 = quantize_weight_per_block_w2(
+            w, er_block_size=er, ie_block_size=256,
+        )
+        qw128, s128 = quantize_weight_per_block_w2(
+            w, er_block_size=er, ie_block_size=128,
+        )
+
+        w256 = dequantize_weight(qw256, s256, block_size=256, weight_bits=1.58)
+        w128 = dequantize_weight(qw128, s128, block_size=128, weight_bits=1.58)
+        assert torch.equal(w256, w128), (
+            f"max_diff={(w256 - w128).abs().max()}"
+        )
+
+    def test_scale_shape_when_ie_capped(self):
+        """IE=256 capped → scale shape matches IE=128."""
+        torch.manual_seed(42)
+        w = torch.randn(4, 1024, dtype=torch.bfloat16)
+        er = 256
+
+        _, s256 = quantize_weight_per_block_int4(
+            w, er_block_size=er, ie_block_size=256,
+        )
+        _, s128 = quantize_weight_per_block_int4(
+            w, er_block_size=er, ie_block_size=128,
+        )
+
+        # s256: (4, 1024/256) = (4, 4); s128: (4, 1024/128) = (4, 8)
+        assert s256.shape == (4, 1024 // 256)
+        assert s128.shape == (4, 1024 // 128)
+        # Regardless of IE, dequantized result is the same
+        q256, _ = quantize_weight_per_block_int4(
+            w, er_block_size=er, ie_block_size=256,
+        )
+        w256 = dequantize_weight(q256, s256, block_size=256, weight_bits=4)
+        w128 = dequantize_weight(
+            quantize_weight_per_block_int4(w, er_block_size=er, ie_block_size=128)[0],
+            s128, block_size=128, weight_bits=4,
+        )
+        assert torch.equal(w256, w128)
 
 
 # ────────────────────────────────────────────────────────────

@@ -1,40 +1,34 @@
-"""
-EdgeRazor pure-Python linear method for vLLM.
+"""Quantized embedding method for EdgeRazor — W4 / W1.58.
 
-W4A16:  dequantize INT4 weights → bf16 matmul.
-W4A8:   per-block INT8 quantize activation → dequantize back → bf16 matmul.
-W1.58A16: dequantize W2 (ternary) weights → bf16 matmul.
-W1.58A8:  per-block INT8 quantize activation + dequantize W2 weights → bf16 matmul.
+Per-row dequant at lookup time.  Only the requested rows are unpacked
+and dequantized; the packed weight table stays on GPU at all times.
 
-No custom CUDA kernels — works on any GPU / CPU.
+Works with both the Marlin and pure-Python backends (embedding is
+independent of the GEMM kernel choice).
 """
 
 import torch
 from torch.nn.parameter import Parameter
 from vllm.logger import init_logger
-from vllm.model_executor.layers.linear import LinearMethodBase
+from vllm.model_executor.layers.quantization.base_config import QuantizeMethodBase
 from vllm.model_executor.utils import set_weight_attrs
 
 from .quant_ops import (
     dequantize_weight,
-    quantize_activation_per_block_int8,
     quantize_weight_per_block_int4,
     quantize_weight_per_block_w2,
 )
 
-logger = init_logger("vllm.edgerazor.py")
+logger = init_logger("vllm.edgerazor.embed")
 
 
-class EdgeRazorPyLinearMethod(LinearMethodBase):
-    """Pure-Python W4A16 / W4A8 / W1.58A16 / W1.58A8 linear method."""
+class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
+    """Quantized W4 / W1.58 embedding via sparse per-row dequant."""
 
     def __init__(self, quant_config):
         self.quant_config = quant_config
-        self.er_block_size = quant_config._quant_block_size
-        self.ie_block_size = quant_config._scale_block_size
-        self.needs_split = quant_config._needs_scale_split
-        self.activation_bits = quant_config.activation_bits
         self.weight_bits = quant_config.weight_bits
+        self.ie_block_size = quant_config._scale_block_size
 
     # ── create_weights ───────────────────────────────────────────
 
@@ -68,7 +62,7 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
 
         layer._edgerazor_needs_pack = True
 
-    # ── pack (EdgeRazor uint8 format) ────────────────────────────
+    # ── pack ──────────────────────────────────────────────────────
 
     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
         if not getattr(layer, "_edgerazor_needs_pack", False):
@@ -79,18 +73,14 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
 
         if self.weight_bits == 4:
             qweight, qweight_scale = quantize_weight_per_block_int4(
-                w,
-                er_block_size=self.er_block_size,
-                ie_block_size=self.ie_block_size,
+                w, er_block_size=256, ie_block_size=self.ie_block_size,
             )
         elif self.weight_bits == 1.58:
             qweight, qweight_scale = quantize_weight_per_block_w2(
-                w,
-                er_block_size=self.er_block_size,
-                ie_block_size=self.ie_block_size,
+                w, er_block_size=256, ie_block_size=self.ie_block_size,
             )
         else:
-            raise ValueError(f"Unsupported weight_bits={self.weight_bits}")
+            raise ValueError(f"Unsupported embedding weight_bits={self.weight_bits}")
 
         del layer.weight
         layer.register_parameter(
@@ -105,42 +95,29 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
 
         packed_bytes = qweight.numel() * 1 + qweight_scale.numel() * 2
         ratio = packed_bytes / orig_bytes * 100
-
         wbits_label = "1.58" if self.weight_bits == 1.58 else str(self.weight_bits)
         layer_name = getattr(layer, "_edgerazor_layer_name", "?")
         logger.info(
-            "[EdgeRazor PY] W%sA%d, packed %s %s → %s / %s  "
-            "(%.1f%% of bf16, %.1f bits/el, ER=%d→IE=%d)",
+            "[EdgeRazor EMB] W%sA%d, packed %s %s → %s / %s  "
+            "(%.1f%% of bf16, %.1f bits/el, IE=%d)",
             wbits_label,
-            self.activation_bits,
+            self.quant_config.activation_bits,
             layer_name,
             list(w.shape),
             list(qweight.shape),
             list(qweight_scale.shape),
             ratio,
             ratio * 16 / 100,
-            self.er_block_size,
             self.ie_block_size,
         )
 
-    # ── forward ──────────────────────────────────────────────────
+    # ── forward (sparse lookup + dequant) ─────────────────────────
 
-    def apply(
-        self,
-        layer: torch.nn.Module,
-        x: torch.Tensor,
-        bias: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        w_deq = dequantize_weight(
-            layer.qweight,
-            layer.qweight_scale,
+    def embedding(self, layer: torch.nn.Module, input_: torch.Tensor) -> torch.Tensor:
+        return dequantize_weight(
+            layer.qweight[input_],
+            layer.qweight_scale[input_],
             block_size=self.ie_block_size,
-            out_dtype=x.dtype,
+            out_dtype=layer.qweight_scale.dtype,
             weight_bits=self.weight_bits,
         )
-
-        if self.activation_bits == 8:
-            x_int, _x_scale = quantize_activation_per_block_int8(x)
-            x = x_int.to(x.dtype)
-
-        return torch.nn.functional.linear(x, w_deq, bias)

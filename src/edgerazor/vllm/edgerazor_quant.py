@@ -1,7 +1,11 @@
 """
 EdgeRazor quantization plugin for vLLM.
 
-Supports W4-A8 (both A16 and A8 activation quantization).
+Supports W1.58 (ternary) and W4 (INT4) weight quantization.
+
+Layer selection is driven by ``quant_mode`` via :mod:`.quant_mode_parse`.
+When ``quant_mode`` is absent, the default is: quantize decoder Linear layers,
+skip embedding and lm_head.
 
 Uses two backends, auto-selected by GPU capability:
   - ``linear_marlin.EdgeRazorMarlinLinearMethod``  —  CUDA sm>=75
@@ -22,6 +26,7 @@ from vllm.model_executor.layers.quantization.base_config import (
 )
 from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
 
+from .quant_mode_parse import QuantModeConfig as _QuantModeConfig
 from .quant_ops import (
     ER_W1_58A8_BLOCK_SIZE,
     ER_W4A8_BLOCK_SIZE,
@@ -62,6 +67,28 @@ class EdgeRazorConfig(QuantizationConfig):
         backend: str | None = None,
     ) -> None:
         super().__init__()
+
+        # ── resolve quant_mode ─────────────────────────────────
+        if quant_mode:
+            self._quant_mode_cfg: _QuantModeConfig | None = _QuantModeConfig(
+                quant_mode,
+                weight_bits_override=(
+                    weight_bits if weight_bits != 4 else None
+                ),
+                activation_bits_override=(
+                    activation_bits if activation_bits != 16 else None
+                ),
+            )
+            weight_bits = self._quant_mode_cfg.weight_bits
+            activation_bits = self._quant_mode_cfg.activation_bits
+            kv_cache_bits = self._quant_mode_cfg.kv_cache_bits
+            modules_to_not_convert = modules_to_not_convert or (
+                self._quant_mode_cfg.exclude_names
+            )
+        else:
+            self._quant_mode_cfg = None
+
+        # ── validate ───────────────────────────────────────────
         if weight_bits not in SUPPORTED_W_BITS:
             raise ValueError(
                 f"Unsupported weight_bits={weight_bits}. "
@@ -263,24 +290,87 @@ class EdgeRazorConfig(QuantizationConfig):
 
         return EdgeRazorPyLinearMethod(self)
 
+    # ── per-layer helpers ───────────────────────────────────────
+
+    def _layer_weight_bits(self, prefix: str) -> float:
+        """Resolve *weight_bits* for a specific layer.
+
+        Uses :class:`QuantModeConfig` when *quant_mode* is set,
+        otherwise falls back to the global ``weight_bits``.
+        """
+        if self._quant_mode_cfg is not None:
+            return self._quant_mode_cfg.get_weight_bits(prefix)
+        return self.weight_bits
+
+    def _is_layer_quantized(self, prefix: str) -> bool:
+        """Check whether *prefix* should be quantized.
+
+        Without *quant_mode*, the default is: quantize decoder Linear
+        layers, skip embedding and lm_head.
+        """
+        if self._quant_mode_cfg is not None:
+            return self._quant_mode_cfg.is_layer_quantized(prefix)
+        # Default: skip embedding and lm_head
+        if "embed_tokens" in prefix or prefix.endswith("lm_head"):
+            return False
+        return not any(m in prefix for m in self.modules_to_not_convert)
+
+    def _clone_with_weight_bits(self, weight_bits: float) -> "EdgeRazorConfig":
+        """Shallow clone with overridden *weight_bits* + recalculated block sizes."""
+        import copy
+        clone = copy.copy(self)
+        clone.weight_bits = weight_bits
+
+        # Re-resolve ER / IE block sizes for the new weight_bits
+        clone.er_block_size = (
+            ER_W1_58A8_BLOCK_SIZE if weight_bits == 1.58 else ER_W4A8_BLOCK_SIZE
+        )
+        clone.ie_block_size = (
+            IE_W1_58A8_BLOCK_SIZE if weight_bits == 1.58 else IE_W4A8_BLOCK_SIZE
+        )
+        resolved = resolve_quant_block(clone.er_block_size, clone.ie_block_size)
+        clone._quant_block_size = resolved[0]
+        clone._scale_block_size = resolved[1]
+        clone._needs_scale_split = resolved[2]
+        clone.weight_block_size = [clone.ie_block_size]
+        return clone
+
     # ── dispatch ─────────────────────────────────────────────────
 
     def get_quant_method(
         self, layer: torch.nn.Module, prefix: str
     ) -> QuantizeMethodBase | None:
         if isinstance(layer, LinearBase):
-            if self._is_layer_skipped(prefix):
+            if not self._is_layer_quantized(prefix):
                 from vllm.model_executor.layers.linear import UnquantizedLinearMethod
 
                 return UnquantizedLinearMethod()
-            return self._select_backend()
+
+            wb = self._layer_weight_bits(prefix)
+            if wb not in SUPPORTED_W_BITS:
+                from vllm.model_executor.layers.linear import UnquantizedLinearMethod
+                return UnquantizedLinearMethod()
+
+            # Save layer name for process_weights_after_loading logging
+            layer._edgerazor_layer_name = prefix
+
+            if wb == self.weight_bits:
+                return self._select_backend()
+            return self._clone_with_weight_bits(wb)._select_backend()
+
         if isinstance(layer, VocabParallelEmbedding):
+            if self._is_layer_quantized(prefix):
+                wb = self._layer_weight_bits(prefix)
+                if wb in SUPPORTED_W_BITS:
+                    layer._edgerazor_layer_name = prefix
+                    from .embedding import EdgeRazorEmbeddingMethod
+                    if wb == self.weight_bits:
+                        return EdgeRazorEmbeddingMethod(self)
+                    return EdgeRazorEmbeddingMethod(
+                        self._clone_with_weight_bits(wb)
+                    )
             from vllm.model_executor.layers.vocab_parallel_embedding import (
                 UnquantizedEmbeddingMethod,
             )
-
             return UnquantizedEmbeddingMethod()
         return None
-
-    def _is_layer_skipped(self, prefix: str) -> bool:
-        return any(m in prefix for m in self.modules_to_not_convert)

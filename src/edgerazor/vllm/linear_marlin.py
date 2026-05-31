@@ -105,6 +105,19 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
                 f"group_size ({MARLIN_GROUP_SIZE})"
             )
 
+        # Cap IE at Marlin's max group_size.  Weight-int values are still
+        # computed over the full ER block — only the scale storage granularity
+        # changes, which is bit-exact because scales are replicated.
+        ie_original = self.quant_config._scale_block_size
+        if ie_original > MARLIN_GROUP_SIZE:
+            logger.info(
+                "[EdgeRazor MARLIN] IE block_size %d exceeds Marlin max %d; "
+                "capping scale storage to group_size=%d "
+                "(weight-int quant unchanged, ER=%d).",
+                ie_original, MARLIN_GROUP_SIZE, MARLIN_GROUP_SIZE,
+                self.er_block_size,
+            )
+
         # 1. Per-block quantize (ER block)
         er = self.er_block_size
         w_blocks = w.view(N, -1, er)
@@ -211,11 +224,13 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
         ratio = packed_bytes / orig_bytes * 100
 
         wbits_label = "1.58" if self.weight_bits == 1.58 else str(self.weight_bits)
+        layer_name = getattr(layer, "_edgerazor_layer_name", "?")
         logger.info(
-            "[EdgeRazor MARLIN] W%sA%d, packed %s → Marlin %s / %s  "
+            "[EdgeRazor MARLIN] W%sA%d, packed %s %s → Marlin %s / %s  "
             "(%.1f%% of bf16, %.1f bits/el, ER=%d→IE=%d)",
             wbits_label,
             self.activation_bits,
+            layer_name,
             [N, K],
             list(qweight_marlin.shape),
             list(scales_permuted.shape),

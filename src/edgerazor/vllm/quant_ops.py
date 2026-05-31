@@ -38,7 +38,7 @@ ER_W1_58A8_BLOCK_SIZE = 256
 ER_W4A8_BLOCK_SIZE    = 256
 
 # Inference engine weight block sizes (used for inference / packing)
-IE_W1_58A8_BLOCK_SIZE = 32
+IE_W1_58A8_BLOCK_SIZE = 256
 IE_W4A8_BLOCK_SIZE    = 32
 
 # ── Compat aliases (kept for external imports) ────────────────────
