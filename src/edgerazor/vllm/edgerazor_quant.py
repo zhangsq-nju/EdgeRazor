@@ -56,15 +56,17 @@ class EdgeRazorConfig(QuantizationConfig):
 
     def __init__(
         self,
-        weight_bits: float = 4,
+        weight_bits: float | None = None,
         weight_block_size: int | list[int] | None = None,
         er_block_size: int | None = None,
         ie_block_size: int | None = None,
-        activation_bits: int = 16,
-        kv_cache_bits: int = 16,
+        activation_bits: int | None = None,
+        kv_cache_bits: int | None = None,
         quant_mode: str = "",
         modules_to_not_convert: list[str] | None = None,
         backend: str | None = None,
+        quant_emb: bool | None = None,
+        quant_lm_head: bool | None = None,
     ) -> None:
         super().__init__()
 
@@ -72,12 +74,8 @@ class EdgeRazorConfig(QuantizationConfig):
         if quant_mode:
             self._quant_mode_cfg: _QuantModeConfig | None = _QuantModeConfig(
                 quant_mode,
-                weight_bits_override=(
-                    weight_bits if weight_bits != 4 else None
-                ),
-                activation_bits_override=(
-                    activation_bits if activation_bits != 16 else None
-                ),
+                weight_bits_override=weight_bits,
+                activation_bits_override=activation_bits,
             )
             weight_bits = self._quant_mode_cfg.weight_bits
             activation_bits = self._quant_mode_cfg.activation_bits
@@ -87,6 +85,12 @@ class EdgeRazorConfig(QuantizationConfig):
             )
         else:
             self._quant_mode_cfg = None
+
+        # Apply defaults when not specified and no quant_mode
+        if weight_bits is None:
+            weight_bits = 4
+        if activation_bits is None:
+            activation_bits = 16
 
         # ── validate ───────────────────────────────────────────
         if weight_bits not in SUPPORTED_W_BITS:
@@ -110,6 +114,8 @@ class EdgeRazorConfig(QuantizationConfig):
         self.kv_cache_bits = kv_cache_bits
         self.quant_mode = quant_mode
         self.modules_to_not_convert = modules_to_not_convert or []
+        self._quant_emb = quant_emb
+        self._quant_lm_head = quant_lm_head
 
         # Default ER / IE block sizes per weight bit-width
         if er_block_size is None:
@@ -180,16 +186,17 @@ class EdgeRazorConfig(QuantizationConfig):
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "EdgeRazorConfig":
         """Create config from a model's ``quantization_config`` dict."""
-        weight_bits = config.get("weight_bits", 4)
         return cls(
-            weight_bits=weight_bits,
+            weight_bits=config.get("weight_bits"),
             er_block_size=config.get("er_block_size"),
             ie_block_size=config.get("ie_block_size"),
-            activation_bits=config.get("activation_bits", 16),
-            kv_cache_bits=config.get("kv_cache_bits", 16),
+            activation_bits=config.get("activation_bits"),
+            kv_cache_bits=config.get("kv_cache_bits"),
             quant_mode=config.get("quant_mode", ""),
             modules_to_not_convert=config.get("modules_to_not_convert", []),
             backend=config.get("backend"),
+            quant_emb=config.get("quant_emb"),
+            quant_lm_head=config.get("quant_lm_head"),
         )
 
     @classmethod
@@ -311,12 +318,23 @@ class EdgeRazorConfig(QuantizationConfig):
     def _is_layer_quantized(self, prefix: str) -> bool:
         """Check whether *prefix* should be quantized.
 
-        Without *quant_mode*, the default is: quantize decoder Linear
-        layers, skip embedding and lm_head.
+        Priority (highest first):
+
+        1. ``quant_emb`` / ``quant_lm_head`` from config.json
+        2. *quant_mode* overrides + base function
+        3. Default: quantize decoder Linear layers, skip embedding / lm_head.
         """
+        # Priority 1: explicit quant_emb / quant_lm_head from config.json
+        if "embed_tokens" in prefix and self._quant_emb is not None:
+            return self._quant_emb
+        if prefix.endswith("lm_head") and self._quant_lm_head is not None:
+            return self._quant_lm_head
+
+        # Priority 2: quant_mode config (if present)
         if self._quant_mode_cfg is not None:
             return self._quant_mode_cfg.is_layer_quantized(prefix)
-        # Default: skip embedding and lm_head
+
+        # Priority 3: default — skip embedding and lm_head
         if "embed_tokens" in prefix or prefix.endswith("lm_head"):
             return False
         return not any(m in prefix for m in self.modules_to_not_convert)
