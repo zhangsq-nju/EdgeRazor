@@ -363,12 +363,21 @@ class EdgeRazorConfig(QuantizationConfig):
                 wb = self._layer_weight_bits(prefix)
                 if wb in SUPPORTED_W_BITS:
                     layer._edgerazor_layer_name = prefix
-                    from .embedding import EdgeRazorEmbeddingMethod
-                    if wb == self.weight_bits:
-                        return EdgeRazorEmbeddingMethod(self)
-                    return EdgeRazorEmbeddingMethod(
-                        self._clone_with_weight_bits(wb)
-                    )
+                    if "lm_head" in prefix:
+                        # lm_head is a linear projection (hidden→vocab).
+                        # .clone() in process_weights_after_loading breaks
+                        # tied-weight sharing, so it can use a different
+                        # format from embed_tokens safely.
+                        if wb == self.weight_bits:
+                            return self._select_backend()
+                        return self._clone_with_weight_bits(wb)._select_backend()
+                    else:
+                        from .embedding import EdgeRazorEmbeddingMethod
+                        if wb == self.weight_bits:
+                            return EdgeRazorEmbeddingMethod(self)
+                        return EdgeRazorEmbeddingMethod(
+                            self._clone_with_weight_bits(wb)
+                        )
             from vllm.model_executor.layers.vocab_parallel_embedding import (
                 UnquantizedEmbeddingMethod,
             )

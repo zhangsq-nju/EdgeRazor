@@ -68,7 +68,7 @@ class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
         if not getattr(layer, "_edgerazor_needs_pack", False):
             return
 
-        w = layer.weight.data
+        w = layer.weight.data.clone()  # clone to break tied-weight sharing
         orig_bytes = w.numel() * w.element_size()
 
         if self.weight_bits == 4:
@@ -111,7 +111,18 @@ class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
             self.ie_block_size,
         )
 
-    # ── forward (sparse lookup + dequant) ─────────────────────────
+    # ── forward ──────────────────────────────────────────────────
+
+    def apply(
+        self,
+        layer: torch.nn.Module,
+        x: torch.Tensor,
+        bias: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        raise RuntimeError(
+            "EdgeRazorEmbeddingMethod.apply shoule never be called; "
+            "embedding layers use .embedding() instead.",
+        )
 
     def embedding(self, layer: torch.nn.Module, input_: torch.Tensor) -> torch.Tensor:
         return dequantize_weight(

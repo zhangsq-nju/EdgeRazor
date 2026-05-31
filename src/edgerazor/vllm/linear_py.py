@@ -74,7 +74,7 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
         if not getattr(layer, "_edgerazor_needs_pack", False):
             return
 
-        w = layer.weight.data
+        w = layer.weight.data.clone()  # clone to break tied-weight sharing
         orig_bytes = w.numel() * w.element_size()
 
         if self.weight_bits == 4:
