@@ -34,9 +34,10 @@ logger = init_logger("vllm.edgerazor.quant")
 
 _BACKEND = None  # cached backend name for logging
 
-SUPPRTED_W_BITS = (1.58, 4)
-SUPPRTED_A_BITS = (8, 16)
+SUPPORTED_W_BITS = (1.58, 4)
+SUPPORTED_A_BITS = (8, 16)
 
+SUPPORTED_BACKENDS = ("marlin", "py")
 
 @register_quantization_config("edgerazor")
 class EdgeRazorConfig(QuantizationConfig):
@@ -58,19 +59,26 @@ class EdgeRazorConfig(QuantizationConfig):
         kv_cache_bits: int = 16,
         quant_mode: str = "",
         modules_to_not_convert: list[str] | None = None,
+        backend: str | None = None,
     ) -> None:
         super().__init__()
-        if weight_bits not in SUPPRTED_W_BITS:
+        if weight_bits not in SUPPORTED_W_BITS:
             raise ValueError(
                 f"Unsupported weight_bits={weight_bits}. "
-                f"EdgeRazor supports: {SUPPRTED_W_BITS}"
+                f"EdgeRazor supports: {SUPPORTED_W_BITS}"
             )
-        if activation_bits not in SUPPRTED_A_BITS:
+        if activation_bits not in SUPPORTED_A_BITS:
             raise ValueError(
                 f"Unsupported activation_bits={activation_bits}. "
-                f"EdgeRazor supports: {SUPPRTED_A_BITS}"
+                f"EdgeRazor supports: {SUPPORTED_A_BITS}"
+            )
+        if backend is not None and backend not in SUPPORTED_BACKENDS:
+            raise ValueError(
+                f"Unsupported backend={backend}. "
+                f"EdgeRazor supports: {SUPPORTED_BACKENDS}"
             )
         self.weight_bits = weight_bits
+        self._user_backend = backend
         self.activation_bits = activation_bits
         self.kv_cache_bits = kv_cache_bits
         self.quant_mode = quant_mode
@@ -106,11 +114,12 @@ class EdgeRazorConfig(QuantizationConfig):
         self._scale_block_size = resolved[1]
         self._needs_scale_split = resolved[2]
 
+        wbits_label = "1.58" if self.weight_bits == 1.58 else str(self.weight_bits)
         logger.info(
             "[EdgeRazor] Quantization config created: "
-            "weight_bits=%d, activation_bits=%d, kv_cache_bits=%d, "
+            "weight_bits=%s, activation_bits=%d, kv_cache_bits=%d, "
             "weight_block_size=%s, quant_mode=%s",
-            self.weight_bits,
+            wbits_label,
             self.activation_bits,
             self.kv_cache_bits,
             self.weight_block_size,
@@ -153,6 +162,7 @@ class EdgeRazorConfig(QuantizationConfig):
             kv_cache_bits=config.get("kv_cache_bits", 16),
             quant_mode=config.get("quant_mode", ""),
             modules_to_not_convert=config.get("modules_to_not_convert", []),
+            backend=config.get("backend"),
         )
 
     @classmethod
@@ -195,22 +205,40 @@ class EdgeRazorConfig(QuantizationConfig):
     # ── backend selection ────────────────────────────────────────
 
     def _select_backend(self):
-        """Select linear method backend based on GPU capability.
+        """Select linear method backend.
 
-        W4A16 / W4A8 / W1.58A16 / W1.58A8 → Marlin (W1.58 upcast to W4).
-        Falls back to pure-Python on older GPUs or CPU.
+        Priority:
+        1. User-specified ``backend`` in config.json, if the environment
+           supports it (Marlin requires CUDA sm>=75 + weight_bits in (1.58, 4)).
+        2. Auto-select: Marlin when supported, otherwise pure-Python.
         """
         global _BACKEND
         from .linear_marlin import can_use_marlin
 
-        use_marlin = can_use_marlin(self) and self.weight_bits in (1.58, 4)
+        marlin_ok = can_use_marlin(self) and self.weight_bits in (1.58, 4)
+        preferred = self._user_backend
+
+        # Resolve: user choice wins if compatible, else auto
+        if preferred == "marlin" and marlin_ok:
+            use_marlin = True
+        elif preferred == "py":
+            use_marlin = False
+        elif preferred is not None:
+            logger.warning(
+                "[EdgeRazor] Backend '%s' unavailable (marlin_ok=%s), "
+                "auto-selecting.",
+                preferred, marlin_ok,
+            )
+            use_marlin = marlin_ok
+        else:
+            use_marlin = marlin_ok
 
         if use_marlin:
             if _BACKEND != "marlin":
                 _BACKEND = "marlin"
                 logger.info(
-                    "[EdgeRazor] Backend: Marlin (CUDA sm>=75 fused kernel, W%dA%d)",
-                    self.weight_bits,
+                    "[EdgeRazor] Backend: Marlin (CUDA sm>=75 fused kernel, W%sA%d)",
+                    "1.58" if self.weight_bits == 1.58 else str(self.weight_bits),
                     self.activation_bits,
                 )
             return self._marlin_method()
@@ -219,8 +247,8 @@ class EdgeRazorConfig(QuantizationConfig):
                 _BACKEND = "py"
                 logger.info(
                     "[EdgeRazor] Backend: pure-Python "
-                    "(dequant + torch.matmul, W%dA%d)",
-                    self.weight_bits,
+                    "(dequant + torch.matmul, W%sA%d)",
+                    "1.58" if self.weight_bits == 1.58 else str(self.weight_bits),
                     self.activation_bits,
                 )
             return self._py_method()

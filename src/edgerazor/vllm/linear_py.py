@@ -106,10 +106,11 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
         packed_bytes = qweight.numel() * 1 + qweight_scale.numel() * 2
         ratio = packed_bytes / orig_bytes * 100
 
+        wbits_label = "1.58" if self.weight_bits == 1.58 else str(self.weight_bits)
         logger.info(
-            "[EdgeRazor PY] W%dA%d, packed %s → %s / %s  "
+            "[EdgeRazor PY] W%sA%d, packed %s → %s / %s  "
             "(%.1f%% of bf16, %.1f bits/el, ER=%d→IE=%d)",
-            self.weight_bits,
+            wbits_label,
             self.activation_bits,
             list(w.shape),
             list(qweight.shape),
