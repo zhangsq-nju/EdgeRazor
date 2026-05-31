@@ -114,7 +114,7 @@ class EdgeRazorMarlinLinearMethod(LinearMethodBase):
                 w_blocks.abs().amax(dim=-1, keepdim=True).clamp(min=1e-5) / INT4_MAX
             )
             int_max = INT4_MAX
-        elif self.weight_bits == 1:
+        elif self.weight_bits == 1.58:
             # Ternary: clip-method scale = mean(|w|) * w_scale_factor
             w_scale_er = (
                 w_blocks.abs().mean(dim=-1, keepdim=True)

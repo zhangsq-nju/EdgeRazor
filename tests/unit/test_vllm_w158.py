@@ -4,7 +4,7 @@ Covers:
   - W2 pack / unpack roundtrip
   - ternary weight quantization (clip method, scale correctness)
   - uint4b8 encoding for ternary values {-1,0,1} → {7,8,9}
-  - dequantize_weight with weight_bits=1
+  - dequantize_weight with weight_bits=1.58
   - W1.58 vs W4 computation equivalence
   - ER/IE block-size split for ternary weights
 """
@@ -135,7 +135,7 @@ class TestTernaryQuantize:
         )
         w_deq = dequantize_weight(
             qweight, scale, block_size=32, out_dtype=torch.bfloat16,
-            weight_bits=1,
+            weight_bits=1.58,
         )
         # Ternary is crude; check that dequantized values are close-ish
         # (ternary can only represent sign, so correlation is what matters)
@@ -255,7 +255,7 @@ class TestW1vsW4Framework:
         q158, s158 = quantize_weight_per_block_w2(w)
         q4, s4 = quantize_weight_per_block_int4(w)
 
-        w158_deq = dequantize_weight(q158, s158, block_size=32, weight_bits=1)
+        w158_deq = dequantize_weight(q158, s158, block_size=32, weight_bits=1.58)
         w4_deq = dequantize_weight(q4, s4, block_size=32, weight_bits=4)
 
         # Both should be roughly similar to original weight
@@ -334,8 +334,8 @@ class TestTernaryBlockSplit:
             w, er_block_size=256, ie_block_size=256,
         )
 
-        w32 = dequantize_weight(qw32, s32, block_size=32, weight_bits=1)
-        w256 = dequantize_weight(qw256, s256, block_size=256, weight_bits=1)
+        w32 = dequantize_weight(qw32, s32, block_size=32, weight_bits=1.58)
+        w256 = dequantize_weight(qw256, s256, block_size=256, weight_bits=1.58)
 
         # Bit-exact: same ternary values + same ER scale → same dequant
         assert torch.equal(w32, w256), (

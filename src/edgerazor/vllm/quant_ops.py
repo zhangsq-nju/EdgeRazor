@@ -235,7 +235,7 @@ def dequantize_weight(
     """
     if weight_bits == 4:
         w_int = unpack_int4(qweight)
-    elif weight_bits == 1:
+    elif weight_bits == 1.58:
         w_int = unpack_w2(qweight)
     else:
         raise ValueError(f"Unsupported weight_bits={weight_bits}")

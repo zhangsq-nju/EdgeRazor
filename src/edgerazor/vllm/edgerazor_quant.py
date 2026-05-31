@@ -34,7 +34,7 @@ logger = init_logger("vllm.edgerazor.quant")
 
 _BACKEND = None  # cached backend name for logging
 
-SUPPRTED_W_BITS = (1, 4)
+SUPPRTED_W_BITS = (1.58, 4)
 SUPPRTED_A_BITS = (8, 16)
 
 
@@ -50,7 +50,7 @@ class EdgeRazorConfig(QuantizationConfig):
 
     def __init__(
         self,
-        weight_bits: int = 4,
+        weight_bits: float = 4,
         weight_block_size: int | list[int] | None = None,
         er_block_size: int | None = None,
         ie_block_size: int | None = None,
@@ -79,11 +79,11 @@ class EdgeRazorConfig(QuantizationConfig):
         # Default ER / IE block sizes per weight bit-width
         if er_block_size is None:
             er_block_size = (
-                ER_W1_58A8_BLOCK_SIZE if weight_bits == 1 else ER_W4A8_BLOCK_SIZE
+                ER_W1_58A8_BLOCK_SIZE if weight_bits == 1.58 else ER_W4A8_BLOCK_SIZE
             )
         if ie_block_size is None:
             ie_block_size = (
-                IE_W1_58A8_BLOCK_SIZE if weight_bits == 1 else IE_W4A8_BLOCK_SIZE
+                IE_W1_58A8_BLOCK_SIZE if weight_bits == 1.58 else IE_W4A8_BLOCK_SIZE
             )
 
         # Resolve block sizes
@@ -203,7 +203,7 @@ class EdgeRazorConfig(QuantizationConfig):
         global _BACKEND
         from .linear_marlin import can_use_marlin
 
-        use_marlin = can_use_marlin(self) and self.weight_bits in (1, 4)
+        use_marlin = can_use_marlin(self) and self.weight_bits in (1.58, 4)
 
         if use_marlin:
             if _BACKEND != "marlin":

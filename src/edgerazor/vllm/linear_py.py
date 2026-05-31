@@ -83,7 +83,7 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
                 er_block_size=self.er_block_size,
                 ie_block_size=self.ie_block_size,
             )
-        elif self.weight_bits == 1:
+        elif self.weight_bits == 1.58:
             qweight, qweight_scale = quantize_weight_per_block_w2(
                 w,
                 er_block_size=self.er_block_size,
