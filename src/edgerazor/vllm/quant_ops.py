@@ -376,22 +376,21 @@ def quantize_activation_per_block_int8(
 SUPER_GROUP_SIZE = 8
 
 
-def _mixed_row_mask(N: int, bits: float) -> Tensor:
+def _mixed_row_mask(N: int, bits: float, device: torch.device | None = None) -> Tensor:
     """Compute INT4-row mask for the given super-group pattern.
 
     Args:
         N: number of output channels (rows).
         bits: ``1.88`` or ``2.79``.
+        device: torch device for the output tensor.
 
     Returns:
         Bool tensor of shape ``(N,)`` — ``True`` = INT4, ``False`` = INT2.
     """
     if bits == 1.88:
-        # Row 0 of each group → INT4, rows 1-7 → INT2
-        return torch.arange(N) % SUPER_GROUP_SIZE == 0
+        return torch.arange(N, device=device) % SUPER_GROUP_SIZE == 0
     elif bits == 2.79:
-        # Rows 0-3 of each group → INT4, rows 4-7 → INT2
-        return (torch.arange(N) % SUPER_GROUP_SIZE) < 4
+        return (torch.arange(N, device=device) % SUPER_GROUP_SIZE) < 4
     else:
         raise ValueError(f"Unsupported mixed-precision bits={bits}")
 
@@ -420,30 +419,36 @@ def quantize_weight_mixed_precision(
 
     Returns:
         ``(qweight_int4, qweight_int2, qweight_scale_int4, qweight_scale_int2,
-           row_mask_int4)``
+           inverse_perm)`` where *inverse_perm* maps ``cat([INT4_rows, INT2_rows])``
+        back to the original row order (compile-friendly alternative to nonzero
+        + index_put).
     """
     N, K = w.shape
-    row_mask = _mixed_row_mask(N, bits)
+    row_mask = _mixed_row_mask(N, bits, device=w.device)
     idx_int4 = torch.where(row_mask)[0]
     idx_int2 = torch.where(~row_mask)[0]
+
+    # Pre-compute inverse permutation for dequant time (avoids nonzero+index_put)
+    combined_idx = torch.cat([idx_int4, idx_int2])
+    inverse_perm = torch.argsort(combined_idx)
 
     if len(idx_int4) > 0:
         qw_i4, qs_i4 = quantize_weight_per_block_int4(
             w[idx_int4], er_block_size, ie_block_size, epsilon,
         )
     else:
-        qw_i4 = torch.empty(0, dtype=torch.uint8, device=w.device)
-        qs_i4 = torch.empty(0, dtype=torch.bfloat16, device=w.device)
+        qw_i4 = torch.empty(0, K // 2, dtype=torch.uint8, device=w.device)
+        qs_i4 = torch.empty(0, K // ie_block_size, dtype=torch.bfloat16, device=w.device)
 
     if len(idx_int2) > 0:
         qw_int2, qs_int2 = quantize_weight_per_block_int2(
             w[idx_int2], er_block_size, ie_block_size, w_scale_factor, epsilon,
         )
     else:
-        qw_int2 = torch.empty(0, dtype=torch.uint8, device=w.device)
-        qs_int2 = torch.empty(0, dtype=torch.bfloat16, device=w.device)
+        qw_int2 = torch.empty(0, K // 4, dtype=torch.uint8, device=w.device)
+        qs_int2 = torch.empty(0, K // ie_block_size, dtype=torch.bfloat16, device=w.device)
 
-    return qw_i4, qw_int2, qs_i4, qs_int2, row_mask
+    return qw_i4, qw_int2, qs_i4, qs_int2, inverse_perm
 
 
 def dequantize_weight_mixed(
@@ -451,55 +456,36 @@ def dequantize_weight_mixed(
     qweight_int2: Tensor,
     qweight_scale_int4: Tensor,
     qweight_scale_int2: Tensor,
-    row_mask_int4: Tensor,
+    inverse_perm: Tensor,
     block_size: int = 32,
     out_dtype: torch.dtype = torch.bfloat16,
 ) -> Tensor:
     """Dequantize mixed-precision weights and interleave INT4 / INT2 rows.
+
+    Uses a pre-computed inverse permutation (compile-friendly; avoids
+    ``nonzero`` + ``index_put`` which produce dynamic shapes).
 
     Args:
         qweight_int4: packed uint8 for INT4 rows.
         qweight_int2: packed uint8 for INT2 rows.
         qweight_scale_int4: bf16 scales for INT4 rows.
         qweight_scale_int2: bf16 scales for INT2 rows.
-        row_mask_int4: bool ``(N,)`` — ``True`` = INT4 row.
+        inverse_perm: int64 ``(N,)`` — maps ``cat([INT4, INT2], dim=0)`` back
+            to the original row order.
         block_size: IE scale block size.
         out_dtype: target dtype for dequantized weight.
 
     Returns:
         Dequantized weight ``(N, K)`` in *out_dtype*.
     """
-    N = row_mask_int4.shape[0]
-    nz_i4 = row_mask_int4.sum().item()
-    nz_int2 = (N - nz_i4)
-    if nz_i4 > 0:
-        K4 = qweight_int4.shape[1] * 2
-    else:
-        K4 = 0
-    if nz_int2 > 0:
-        K2 = qweight_int2.shape[1] * 4
-    else:
-        K2 = 0
+    w_int4 = dequantize_weight(
+        qweight_int4, qweight_scale_int4,
+        block_size=block_size, out_dtype=out_dtype, weight_bits=4,
+    )
+    w_int2 = dequantize_weight(
+        qweight_int2, qweight_scale_int2,
+        block_size=block_size, out_dtype=out_dtype, weight_bits=1.58,
+    )
 
-    K = K4 if nz_i4 > 0 else K2
-    assert K == (K2 if nz_int2 > 0 else K4), f"K mismatch: INT4→{K4} INT2→{K2}"
-
-    w_deq = torch.empty(N, K, dtype=out_dtype, device=row_mask_int4.device)
-
-    if nz_i4 > 0:
-        w_int4 = dequantize_weight(
-            qweight_int4, qweight_scale_int4,
-            block_size=block_size, out_dtype=out_dtype, weight_bits=4,
-        )
-        idx_i4 = row_mask_int4.nonzero(as_tuple=False).squeeze(1)
-        w_deq[idx_i4] = w_int4
-
-    if nz_int2 > 0:
-        w_int2 = dequantize_weight(
-            qweight_int2, qweight_scale_int2,
-            block_size=block_size, out_dtype=out_dtype, weight_bits=1.58,
-        )
-        idx_int2 = (~row_mask_int4).nonzero(as_tuple=False).squeeze(1)
-        w_deq[idx_int2] = w_int2
-
-    return w_deq
+    # cat + permute back: torch.compile can trace fixed-index gather
+    return torch.cat([w_int4, w_int2], dim=0)[inverse_perm]

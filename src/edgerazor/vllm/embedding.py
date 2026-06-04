@@ -16,8 +16,8 @@ from vllm.model_executor.utils import set_weight_attrs
 from .quant_ops import (
     dequantize_weight,
     quantize_activation_per_block_int8,
-    quantize_weight_per_block_int4,
     quantize_weight_per_block_int2,
+    quantize_weight_per_block_int4,
 )
 
 logger = init_logger("vllm.edgerazor.embed")

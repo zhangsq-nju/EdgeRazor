@@ -20,8 +20,8 @@ from .quant_ops import (
     dequantize_weight_mixed,
     quantize_activation_per_block_int8,
     quantize_weight_mixed_precision,
-    quantize_weight_per_block_int4,
     quantize_weight_per_block_int2,
+    quantize_weight_per_block_int4,
 )
 
 logger = init_logger("vllm.edgerazor.py")
@@ -191,7 +191,7 @@ class EdgeRazorPyMixedPrecisionLinearMethod(LinearMethodBase):
         w = layer.weight.data
         orig_bytes = w.numel() * w.element_size()
 
-        qw_i4, qw_int2, qs_i4, qs_int2, row_mask = quantize_weight_mixed_precision(
+        qw_i4, qw_int2, qs_i4, qs_int2, inverse_perm = quantize_weight_mixed_precision(
             w, bits=self.weight_bits,
             er_block_size=self.er_block_size, ie_block_size=self.ie_block_size,
         )
@@ -208,7 +208,7 @@ class EdgeRazorPyMixedPrecisionLinearMethod(LinearMethodBase):
         layer.register_parameter(
             "qweight_scale_int2", Parameter(qs_int2.contiguous(), requires_grad=False),
         )
-        layer.register_buffer("_edgerazor_row_mask_int4", row_mask)
+        layer.register_buffer("_edgerazor_inverse_perm", inverse_perm)
         layer._edgerazor_needs_pack = False
 
         packed_bytes = qw_i4.numel() + qw_int2.numel() \
@@ -229,7 +229,7 @@ class EdgeRazorPyMixedPrecisionLinearMethod(LinearMethodBase):
         w_deq = dequantize_weight_mixed(
             layer.qweight_int4, layer.qweight_int2,
             layer.qweight_scale_int4, layer.qweight_scale_int2,
-            layer._edgerazor_row_mask_int4,
+            layer._edgerazor_inverse_perm,
             block_size=self.ie_block_size,
             out_dtype=x.dtype,
         )

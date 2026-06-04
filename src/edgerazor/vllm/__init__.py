@@ -25,16 +25,16 @@ from .quant_ops import (
     W1_58A8_BLOCK_SIZE,
     W4A8_BLOCK_SIZE,
     dequantize_weight,
-    pack_int4,
     pack_int2,
+    pack_int4,
     quantize_activation_per_block_int8,
     quantize_activation_per_token_int8,
-    quantize_weight_per_block_int4,
     quantize_weight_per_block_int2,
+    quantize_weight_per_block_int4,
     quantize_weight_ternary_to_int4,
     resolve_quant_block,
-    unpack_int4,
     unpack_int2,
+    unpack_int4,
 )
 
 __all__ = [
