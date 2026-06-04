@@ -3,8 +3,8 @@ EdgeRazor pure-Python linear method for vLLM.
 
 W4A16:  dequantize INT4 weights → bf16 matmul.
 W4A8:   per-block INT8 quantize activation → dequantize back → bf16 matmul.
-W1.58A16: dequantize W2 (ternary) weights → bf16 matmul.
-W1.58A8:  per-block INT8 quantize activation + dequantize W2 weights → bf16 matmul.
+W1.58A16: dequantize INT2 (ternary) weights → bf16 matmul.
+W1.58A8:  per-block INT8 quantize activation + dequantize INT2 weights → bf16 matmul.
 
 No custom CUDA kernels — works on any GPU / CPU.
 """
@@ -17,9 +17,11 @@ from vllm.model_executor.utils import set_weight_attrs
 
 from .quant_ops import (
     dequantize_weight,
+    dequantize_weight_mixed,
     quantize_activation_per_block_int8,
+    quantize_weight_mixed_precision,
     quantize_weight_per_block_int4,
-    quantize_weight_per_block_w2,
+    quantize_weight_per_block_int2,
 )
 
 logger = init_logger("vllm.edgerazor.py")
@@ -84,7 +86,7 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
                 ie_block_size=self.ie_block_size,
             )
         elif self.weight_bits == 1.58:
-            qweight, qweight_scale = quantize_weight_per_block_w2(
+            qweight, qweight_scale = quantize_weight_per_block_int2(
                 w,
                 er_block_size=self.er_block_size,
                 ie_block_size=self.ie_block_size,
@@ -137,6 +139,99 @@ class EdgeRazorPyLinearMethod(LinearMethodBase):
             block_size=self.ie_block_size,
             out_dtype=x.dtype,
             weight_bits=self.weight_bits,
+        )
+
+        if self.activation_bits == 8:
+            x_int, x_scale = quantize_activation_per_block_int8(x)
+            x = (x_int.float() * x_scale.repeat_interleave(
+                x.shape[-1] // x_scale.shape[-1], dim=-1,
+            ).float()).to(x.dtype)
+
+        return torch.nn.functional.linear(x, w_deq, bias)
+
+
+class EdgeRazorPyMixedPrecisionLinearMethod(LinearMethodBase):
+    """Pure-Python mixed-precision W1.88/W2.79 (INT4 + INT2) linear method.
+
+    Solution: dual qweight tensors + row-mask interleaving.
+    Rows are assigned to INT4 or INT2 per the super-group pattern.
+    """
+
+    def __init__(self, quant_config):
+        self.quant_config = quant_config
+        self.er_block_size = quant_config._quant_block_size
+        self.ie_block_size = quant_config._scale_block_size
+        self.activation_bits = quant_config.activation_bits
+        self.weight_bits = quant_config.weight_bits
+
+    # ── create_weights ───────────────────────────────────────────
+
+    def create_weights(self, layer, input_size_per_partition, output_partition_sizes,
+                       input_size, output_size, params_dtype, **extra_weight_attrs):
+        output_size_per_partition = sum(output_partition_sizes)
+        weight_loader = extra_weight_attrs.pop("weight_loader")
+
+        from vllm.model_executor.parameter import ModelWeightParameter
+
+        weight = ModelWeightParameter(
+            data=torch.empty(output_size_per_partition, input_size_per_partition,
+                             dtype=params_dtype),
+            input_dim=1, output_dim=0, weight_loader=weight_loader,
+        )
+        layer.register_parameter("weight", weight)
+        set_weight_attrs(weight, extra_weight_attrs)
+        layer._edgerazor_needs_pack = True
+
+    # ── pack ─────────────────────────────────────────────────────
+
+    def process_weights_after_loading(self, layer) -> None:
+        if not getattr(layer, "_edgerazor_needs_pack", False):
+            return
+
+        w = layer.weight.data
+        orig_bytes = w.numel() * w.element_size()
+
+        qw_i4, qw_int2, qs_i4, qs_int2, row_mask = quantize_weight_mixed_precision(
+            w, bits=self.weight_bits,
+            er_block_size=self.er_block_size, ie_block_size=self.ie_block_size,
+        )
+        del layer.weight
+        layer.register_parameter(
+            "qweight_int4", Parameter(qw_i4.contiguous(), requires_grad=False),
+        )
+        layer.register_parameter(
+            "qweight_int2", Parameter(qw_int2.contiguous(), requires_grad=False),
+        )
+        layer.register_parameter(
+            "qweight_scale_int4", Parameter(qs_i4.contiguous(), requires_grad=False),
+        )
+        layer.register_parameter(
+            "qweight_scale_int2", Parameter(qs_int2.contiguous(), requires_grad=False),
+        )
+        layer.register_buffer("_edgerazor_row_mask_int4", row_mask)
+        layer._edgerazor_needs_pack = False
+
+        packed_bytes = qw_i4.numel() + qw_int2.numel() \
+                     + (qs_i4.numel() + qs_int2.numel()) * 2
+        ratio = packed_bytes / orig_bytes * 100
+        layer_name = getattr(layer, "_edgerazor_layer_name", "?")
+        logger.info(
+            "[EdgeRazor PY] W%.2fA%d, packed %s %s → I4:%s/INT2:%s (%.1f%%, ER=%d→IE=%d)",
+            self.weight_bits, self.activation_bits,
+            layer_name, list(w.shape),
+            list(qw_i4.shape), list(qw_int2.shape), ratio,
+            self.er_block_size, self.ie_block_size,
+        )
+
+    # ── forward ──────────────────────────────────────────────────
+
+    def apply(self, layer, x, bias=None):
+        w_deq = dequantize_weight_mixed(
+            layer.qweight_int4, layer.qweight_int2,
+            layer.qweight_scale_int4, layer.qweight_scale_int2,
+            layer._edgerazor_row_mask_int4,
+            block_size=self.ie_block_size,
+            out_dtype=x.dtype,
         )
 
         if self.activation_bits == 8:

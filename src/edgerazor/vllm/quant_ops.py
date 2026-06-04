@@ -4,7 +4,7 @@ Pure quantization operations — no vLLM dependency.
 EdgeRazor per-block weight quantization formats:
 
   W4  (INT4):  block_size=256, symmetric absmax, 2×INT4 per uint8
-  W1.58 (W2):   block_size=256, clip (mean-abs), 4×INT2 per uint8
+  W1.58 (INT2):   block_size=256, clip (mean-abs), 4×INT2 per uint8
 
 Reference quant functions (from edgerazor.qat.util.quant_function):
   - weight_quant_uniform_symmetric_absmax_per_block_int4
@@ -35,14 +35,17 @@ INT8_MAX    = 127         # 2^(8-1) - 1
 
 # EdgeRazor weight block sizes (used for training)
 ER_W1_58A8_BLOCK_SIZE = 256
+ER_WXA8_BLOCK_SIZE    = 256
 ER_W4A8_BLOCK_SIZE    = 256
 
 # Inference engine weight block sizes (used for inference / packing)
 IE_W1_58A8_BLOCK_SIZE = 256
+IE_WXA8_BLOCK_SIZE    = 256
 IE_W4A8_BLOCK_SIZE    = 32
 
 # ── Compat aliases (kept for external imports) ────────────────────
 W1_58A8_BLOCK_SIZE = ER_W1_58A8_BLOCK_SIZE
+WXA8_BLOCK_SIZE    = ER_WXA8_BLOCK_SIZE
 W4A8_BLOCK_SIZE    = ER_W4A8_BLOCK_SIZE
 
 # ──────────────────────────────────────────────
@@ -89,7 +92,7 @@ def unpack_int4(qweight: Tensor) -> Tensor:
 # Pack / Unpack INT2 (W1.58-A8 ternary → 2-bit)
 # ──────────────────────────────────────────────
 
-def pack_w2(w_int: Tensor) -> Tensor:
+def pack_int2(w_int: Tensor) -> Tensor:
     """Pack signed INT2 values { -2, -1, 0, 1 } → uint8 (4 values per byte).
 
     Each group of 4 adjacent INT2 values ``[a, b, c, d]`` along the last
@@ -115,10 +118,10 @@ def pack_w2(w_int: Tensor) -> Tensor:
     return v0 | (v1 << 2) | (v2 << 4) | (v3 << 6)
 
 
-def unpack_w2(qweight: Tensor) -> Tensor:
+def unpack_int2(qweight: Tensor) -> Tensor:
     """Unpack uint8 (..., block_size//4) → signed INT8 (..., block_size).
 
-    Reverses :func:`pack_w2`.  Values are returned in [-2, 1].
+    Reverses :func:`pack_int2`.  Values are returned in [-2, 1].
 
     Args:
         qweight: packed uint8 tensor.
@@ -236,7 +239,7 @@ def dequantize_weight(
     if weight_bits == 4:
         w_int = unpack_int4(qweight)
     elif weight_bits == 1.58:
-        w_int = unpack_w2(qweight)
+        w_int = unpack_int2(qweight)
     else:
         raise ValueError(f"Unsupported weight_bits={weight_bits}")
     scale = qweight_scale.repeat_interleave(block_size, dim=1)
@@ -244,17 +247,17 @@ def dequantize_weight(
 
 
 # ──────────────────────────────────────────────
-# Weight quantization for 1.58-bit (ternary → W2 pack)
+# Weight quantization for 1.58-bit (ternary → INT2 pack)
 # ──────────────────────────────────────────────
 
-def quantize_weight_per_block_w2(
+def quantize_weight_per_block_int2(
     w: Tensor,
     er_block_size: int = ER_W1_58A8_BLOCK_SIZE,
     ie_block_size: int = IE_W1_58A8_BLOCK_SIZE,
     w_scale_factor: float = 2.0,
     epsilon: float = 1e-5,
 ) -> tuple[Tensor, Tensor]:
-    """Quantize bf16/fp16 weight to ternary {-1, 0, 1}, packed as W2.
+    """Quantize bf16/fp16 weight to ternary {-1, 0, 1}, packed as INT2.
 
     Uses the clip method (mean-abs scale) from EdgeRazor training,
     equivalent to ``weight_quant_uniform_symmetric_clip_per_block_int1_58``.
@@ -286,7 +289,7 @@ def quantize_weight_per_block_w2(
 
     # Ternarize to {-1, 0, 1}
     w_ternary = (w_blocks / w_scale).round().clamp(-1, 1).to(torch.int8)
-    qweight = pack_w2(w_ternary.view(out_dim, -1))
+    qweight = pack_int2(w_ternary.view(out_dim, -1))
 
     if needs_split:
         n = er_block_size // ie_block_size
@@ -306,7 +309,7 @@ def quantize_weight_ternary_to_int4(
 ) -> tuple[Tensor, Tensor]:
     """Quantize ternary (1.58-bit) weights to per-block INT4 (legacy).
 
-    Prefer :func:`quantize_weight_per_block_w2` for new code — it packs
+    Prefer :func:`quantize_weight_per_block_int2` for new code — it packs
     4 ternary values per byte instead of 2, halving memory usage.
 
     Returns ``(qweight, qweight_scale)`` in INT4-packed format, compatible
@@ -360,3 +363,143 @@ def quantize_activation_per_block_int8(
     x_scale = x_blocks.abs().amax(dim=-1, keepdim=True).clamp(min=epsilon) / INT8_MAX
     x_int = (x_blocks / x_scale).round().clamp(-INT8_MAX, INT8_MAX).to(torch.int8)
     return x_int.view(shape), x_scale.squeeze(-1)
+
+
+# ──────────────────────────────────────────────
+# Mixed-precision quantization (1.88-bit / 2.79-bit)
+# ──────────────────────────────────────────────
+# Super-group = 8 output channels.
+#   1.88-bit:  row % 8 == 0      → INT4,  rest → INT2 (ternary)
+#   2.79-bit:  row % 8 <  4      → INT4,  rest → INT2 (ternary)
+# Solution: dual qweight tensors + row-mask interleaving.
+
+SUPER_GROUP_SIZE = 8
+
+
+def _mixed_row_mask(N: int, bits: float) -> Tensor:
+    """Compute INT4-row mask for the given super-group pattern.
+
+    Args:
+        N: number of output channels (rows).
+        bits: ``1.88`` or ``2.79``.
+
+    Returns:
+        Bool tensor of shape ``(N,)`` — ``True`` = INT4, ``False`` = INT2.
+    """
+    if bits == 1.88:
+        # Row 0 of each group → INT4, rows 1-7 → INT2
+        return torch.arange(N) % SUPER_GROUP_SIZE == 0
+    elif bits == 2.79:
+        # Rows 0-3 of each group → INT4, rows 4-7 → INT2
+        return (torch.arange(N) % SUPER_GROUP_SIZE) < 4
+    else:
+        raise ValueError(f"Unsupported mixed-precision bits={bits}")
+
+
+def quantize_weight_mixed_precision(
+    w: Tensor,
+    bits: float,
+    er_block_size: int = 256,
+    ie_block_size: int = 32,
+    w_scale_factor: float = 2.0,
+    epsilon: float = 1e-5,
+) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+    """Quantize weight to mixed INT4 / INT2 per-block.
+
+    Rows are assigned to INT4 or INT2 based on *bits* (super-group pattern).
+    Quantization is per-block (ER/IE) — INT4 rows use absmax, INT2 rows use
+    clip (mean-abs).
+
+    Args:
+        w: weight tensor, shape ``(out_dim, in_dim)`` bf16.
+        bits: ``1.88`` or ``2.79``.
+        er_block_size: EdgeRazor training block size.
+        ie_block_size: inference engine packing block size.
+        w_scale_factor: multiplier for INT2 mean-abs scale.
+        epsilon: minimum scale to avoid division by zero.
+
+    Returns:
+        ``(qweight_int4, qweight_int2, qweight_scale_int4, qweight_scale_int2,
+           row_mask_int4)``
+    """
+    N, K = w.shape
+    row_mask = _mixed_row_mask(N, bits)
+    idx_int4 = torch.where(row_mask)[0]
+    idx_int2 = torch.where(~row_mask)[0]
+
+    if len(idx_int4) > 0:
+        qw_i4, qs_i4 = quantize_weight_per_block_int4(
+            w[idx_int4], er_block_size, ie_block_size, epsilon,
+        )
+    else:
+        qw_i4 = torch.empty(0, dtype=torch.uint8, device=w.device)
+        qs_i4 = torch.empty(0, dtype=torch.bfloat16, device=w.device)
+
+    if len(idx_int2) > 0:
+        qw_int2, qs_int2 = quantize_weight_per_block_int2(
+            w[idx_int2], er_block_size, ie_block_size, w_scale_factor, epsilon,
+        )
+    else:
+        qw_int2 = torch.empty(0, dtype=torch.uint8, device=w.device)
+        qs_int2 = torch.empty(0, dtype=torch.bfloat16, device=w.device)
+
+    return qw_i4, qw_int2, qs_i4, qs_int2, row_mask
+
+
+def dequantize_weight_mixed(
+    qweight_int4: Tensor,
+    qweight_int2: Tensor,
+    qweight_scale_int4: Tensor,
+    qweight_scale_int2: Tensor,
+    row_mask_int4: Tensor,
+    block_size: int = 32,
+    out_dtype: torch.dtype = torch.bfloat16,
+) -> Tensor:
+    """Dequantize mixed-precision weights and interleave INT4 / INT2 rows.
+
+    Args:
+        qweight_int4: packed uint8 for INT4 rows.
+        qweight_int2: packed uint8 for INT2 rows.
+        qweight_scale_int4: bf16 scales for INT4 rows.
+        qweight_scale_int2: bf16 scales for INT2 rows.
+        row_mask_int4: bool ``(N,)`` — ``True`` = INT4 row.
+        block_size: IE scale block size.
+        out_dtype: target dtype for dequantized weight.
+
+    Returns:
+        Dequantized weight ``(N, K)`` in *out_dtype*.
+    """
+    N = row_mask_int4.shape[0]
+    nz_i4 = row_mask_int4.sum().item()
+    nz_int2 = (N - nz_i4)
+    if nz_i4 > 0:
+        K4 = qweight_int4.shape[1] * 2
+    else:
+        K4 = 0
+    if nz_int2 > 0:
+        K2 = qweight_int2.shape[1] * 4
+    else:
+        K2 = 0
+
+    K = K4 if nz_i4 > 0 else K2
+    assert K == (K2 if nz_int2 > 0 else K4), f"K mismatch: INT4→{K4} INT2→{K2}"
+
+    w_deq = torch.empty(N, K, dtype=out_dtype, device=row_mask_int4.device)
+
+    if nz_i4 > 0:
+        w_int4 = dequantize_weight(
+            qweight_int4, qweight_scale_int4,
+            block_size=block_size, out_dtype=out_dtype, weight_bits=4,
+        )
+        idx_i4 = row_mask_int4.nonzero(as_tuple=False).squeeze(1)
+        w_deq[idx_i4] = w_int4
+
+    if nz_int2 > 0:
+        w_int2 = dequantize_weight(
+            qweight_int2, qweight_scale_int2,
+            block_size=block_size, out_dtype=out_dtype, weight_bits=1.58,
+        )
+        idx_int2 = (~row_mask_int4).nonzero(as_tuple=False).squeeze(1)
+        w_deq[idx_int2] = w_int2
+
+    return w_deq

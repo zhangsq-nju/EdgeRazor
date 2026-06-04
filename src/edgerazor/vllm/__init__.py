@@ -26,22 +26,22 @@ from .quant_ops import (
     W4A8_BLOCK_SIZE,
     dequantize_weight,
     pack_int4,
-    pack_w2,
+    pack_int2,
     quantize_activation_per_block_int8,
     quantize_activation_per_token_int8,
     quantize_weight_per_block_int4,
-    quantize_weight_per_block_w2,
+    quantize_weight_per_block_int2,
     quantize_weight_ternary_to_int4,
     resolve_quant_block,
     unpack_int4,
-    unpack_w2,
+    unpack_int2,
 )
 
 __all__ = [
     # Pure ops
     "dequantize_weight",
-    "pack_int4", "unpack_int4", "pack_w2", "unpack_w2",
-    "quantize_weight_per_block_int4", "quantize_weight_per_block_w2",
+    "pack_int4", "unpack_int4", "pack_int2", "unpack_int2",
+    "quantize_weight_per_block_int4", "quantize_weight_per_block_int2",
     "quantize_weight_ternary_to_int4",
     "quantize_activation_per_token_int8", "quantize_activation_per_block_int8",
     "resolve_quant_block",

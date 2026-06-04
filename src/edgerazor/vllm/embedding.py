@@ -17,7 +17,7 @@ from .quant_ops import (
     dequantize_weight,
     quantize_activation_per_block_int8,
     quantize_weight_per_block_int4,
-    quantize_weight_per_block_w2,
+    quantize_weight_per_block_int2,
 )
 
 logger = init_logger("vllm.edgerazor.embed")
@@ -78,7 +78,7 @@ class EdgeRazorEmbeddingMethod(QuantizeMethodBase):
                 w, er_block_size=256, ie_block_size=self.ie_block_size,
             )
         elif self.weight_bits == 1.58:
-            qweight, qweight_scale = quantize_weight_per_block_w2(
+            qweight, qweight_scale = quantize_weight_per_block_int2(
                 w, er_block_size=256, ie_block_size=self.ie_block_size,
             )
         else:

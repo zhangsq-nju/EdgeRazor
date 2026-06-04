@@ -39,7 +39,7 @@ logger = init_logger("vllm.edgerazor.quant")
 
 _BACKEND = None  # cached backend name for logging
 
-SUPPORTED_W_BITS = (1.58, 4)
+SUPPORTED_W_BITS = (1.58, 1.88, 2.79, 4)
 SUPPORTED_A_BITS = (8, 16)
 
 SUPPORTED_BACKENDS = ("marlin", "py")
@@ -67,6 +67,8 @@ class EdgeRazorConfig(QuantizationConfig):
         backend: str | None = None,
         quant_emb: bool | None = None,
         quant_lm_head: bool | None = None,
+        quant_emb_bits: float | None = None,
+        quant_lm_head_bits: float | None = None,
     ) -> None:
         super().__init__()
 
@@ -116,6 +118,8 @@ class EdgeRazorConfig(QuantizationConfig):
         self.modules_to_not_convert = modules_to_not_convert or []
         self._quant_emb = quant_emb
         self._quant_lm_head = quant_lm_head
+        self._quant_emb_bits = quant_emb_bits
+        self._quant_lm_head_bits = quant_lm_head_bits
 
         # Default ER / IE block sizes per weight bit-width
         if er_block_size is None:
@@ -197,6 +201,8 @@ class EdgeRazorConfig(QuantizationConfig):
             backend=config.get("backend"),
             quant_emb=config.get("quant_emb"),
             quant_lm_head=config.get("quant_lm_head"),
+            quant_emb_bits=config.get("quant_emb_bits"),
+            quant_lm_head_bits=config.get("quant_lm_head_bits"),
         )
 
     @classmethod
@@ -308,9 +314,17 @@ class EdgeRazorConfig(QuantizationConfig):
     def _layer_weight_bits(self, prefix: str) -> float:
         """Resolve *weight_bits* for a specific layer.
 
-        Uses :class:`QuantModeConfig` when *quant_mode* is set,
-        otherwise falls back to the global ``weight_bits``.
+        Priority (highest first):
+
+        1. ``quant_emb_bits`` / ``quant_lm_head_bits`` from config.json
+        2. :class:`QuantModeConfig` overrides + base function
+        3. Global ``weight_bits``
         """
+        if "embed_tokens" in prefix and self._quant_emb_bits is not None:
+            return self._quant_emb_bits
+        if prefix.endswith("lm_head") and self._quant_lm_head_bits is not None:
+            return self._quant_lm_head_bits
+
         if self._quant_mode_cfg is not None:
             return self._quant_mode_cfg.get_weight_bits(prefix)
         return self.weight_bits
@@ -324,11 +338,18 @@ class EdgeRazorConfig(QuantizationConfig):
         2. *quant_mode* overrides + base function
         3. Default: quantize decoder Linear layers, skip embedding / lm_head.
         """
-        # Priority 1: explicit quant_emb / quant_lm_head from config.json
-        if "embed_tokens" in prefix and self._quant_emb is not None:
-            return self._quant_emb
-        if prefix.endswith("lm_head") and self._quant_lm_head is not None:
-            return self._quant_lm_head
+        # Priority 1: explicit quant_emb / quant_lm_head (bool) or bits
+        # Setting bits implies quantization is enabled
+        if "embed_tokens" in prefix:
+            if self._quant_emb is not None:
+                return self._quant_emb
+            if self._quant_emb_bits is not None:
+                return True  # bits set → implicitly enable quantization
+        if prefix.endswith("lm_head"):
+            if self._quant_lm_head is not None:
+                return self._quant_lm_head
+            if self._quant_lm_head_bits is not None:
+                return True
 
         # Priority 2: quant_mode config (if present)
         if self._quant_mode_cfg is not None:
@@ -389,6 +410,13 @@ class EdgeRazorConfig(QuantizationConfig):
             return UnquantizedLinearMethod()
 
         layer._edgerazor_layer_name = prefix
+
+        # Mixed precision (1.88 / 2.79): Python backend only (no Marlin kernel)
+        if wb in (1.88, 2.79):
+            from .linear_py import EdgeRazorPyMixedPrecisionLinearMethod
+            cfg = self if wb == self.weight_bits else self._clone_with_weight_bits(wb)
+            return EdgeRazorPyMixedPrecisionLinearMethod(cfg)
+
         cfg = self if wb == self.weight_bits else self._clone_with_weight_bits(wb)
         return cfg._select_backend()
 

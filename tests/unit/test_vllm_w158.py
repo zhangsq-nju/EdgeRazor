@@ -1,7 +1,7 @@
 """Unit tests for EdgeRazor W1.58 (ternary) weight quantization.
 
 Covers:
-  - W2 pack / unpack roundtrip
+  - INT2 pack / unpack roundtrip
   - ternary weight quantization (clip method, scale correctness)
   - uint4b8 encoding for ternary values {-1,0,1} → {7,8,9}
   - dequantize_weight with weight_bits=1.58
@@ -22,22 +22,22 @@ from edgerazor.vllm.quant_ops import (
     INT8_MAX,
     dequantize_weight,
     pack_int4,
-    pack_w2,
+    pack_int2,
     quantize_activation_per_block_int8,
     quantize_weight_per_block_int4,
-    quantize_weight_per_block_w2,
+    quantize_weight_per_block_int2,
     resolve_quant_block,
     unpack_int4,
-    unpack_w2,
+    unpack_int2,
 )
 
 # ────────────────────────────────────────────────────────────
-# W2 pack / unpack roundtrip
+# INT2 pack / unpack roundtrip
 # ────────────────────────────────────────────────────────────
 
 
-class TestPackUnpackW2:
-    """pack_w2 ↔ unpack_w2 roundtrip identity."""
+class TestPackUnpackINT2:
+    """pack_int2 ↔ unpack_int2 roundtrip identity."""
 
     @pytest.mark.parametrize("shape", [
         (16, 256),
@@ -46,37 +46,37 @@ class TestPackUnpackW2:
         (1, 128),
     ])
     def test_roundtrip_bit_exact(self, shape):
-        """Pack then unpack recovers the original W2 values exactly."""
+        """Pack then unpack recovers the original INT2 values exactly."""
         torch.manual_seed(42)
         w_int = torch.randint(-2, 2, shape, dtype=torch.int8)
-        qweight = pack_w2(w_int)
+        qweight = pack_int2(w_int)
         assert qweight.shape == (shape[0], shape[1] // 4)
         assert qweight.dtype == torch.uint8
 
-        recovered = unpack_w2(qweight)
+        recovered = unpack_int2(qweight)
         assert recovered.shape == w_int.shape
         assert torch.equal(recovered, w_int)
 
     def test_ternary_subset(self):
-        """Ternary values {-1,0,1} roundtrip correctly through W2 pack."""
+        """Ternary values {-1,0,1} roundtrip correctly through INT2 pack."""
         torch.manual_seed(42)
         w_ternary = torch.randint(-1, 2, (8, 256), dtype=torch.int8)
-        qweight = pack_w2(w_ternary)
-        recovered = unpack_w2(qweight)
+        qweight = pack_int2(w_ternary)
+        recovered = unpack_int2(qweight)
         assert torch.equal(recovered, w_ternary)
 
     def test_pack_all_values(self):
-        """All 4 possible W2 values {-2,-1,0,1} pack and unpack correctly."""
+        """All 4 possible INT2 values {-2,-1,0,1} pack and unpack correctly."""
         w = torch.tensor([[-2, -1, 0, 1, -2, -1, 0, 1]], dtype=torch.int8)
-        q = pack_w2(w)
+        q = pack_int2(w)
         assert q.shape == (1, 2)
-        recovered = unpack_w2(q)
+        recovered = unpack_int2(q)
         assert torch.equal(recovered, w)
 
     def test_pack_dtype(self):
-        """pack_w2 outputs uint8."""
+        """pack_int2 outputs uint8."""
         w = torch.zeros(4, 64, dtype=torch.int8)
-        q = pack_w2(w)
+        q = pack_int2(w)
         assert q.dtype == torch.uint8
         assert q.shape == (4, 16)  # 64/4 = 16
 
@@ -87,18 +87,18 @@ class TestPackUnpackW2:
 
 
 class TestTernaryQuantize:
-    """quantize_weight_per_block_w2 correctness."""
+    """quantize_weight_per_block_int2 correctness."""
 
     def test_ternary_values_clamped(self):
         """Output weight values are strictly in {-1, 0, 1}."""
         torch.manual_seed(42)
         # Use a small block_size so we can verify per-block behavior
         w = torch.randn(4, 256, dtype=torch.bfloat16) * 3.0
-        qweight, _scale = quantize_weight_per_block_w2(
+        qweight, _scale = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=32,
         )
         # Unpack and check values are ternary
-        w_int = unpack_w2(qweight)
+        w_int = unpack_int2(qweight)
         assert w_int.min() >= -1
         assert w_int.max() <= 1
         # Ternary values should appear
@@ -108,7 +108,7 @@ class TestTernaryQuantize:
     def test_scale_positive(self):
         """All scales must be strictly positive."""
         w = torch.randn(4, 256, dtype=torch.bfloat16)
-        _qweight, scale = quantize_weight_per_block_w2(w)
+        _qweight, scale = quantize_weight_per_block_int2(w)
         assert (scale > 0).all()
 
     def test_scale_is_mean_abs_times_factor(self):
@@ -118,7 +118,7 @@ class TestTernaryQuantize:
         er = 256
         w_blocks = w.view(1, -1, er)
         expected_scale = w_blocks.abs().mean(dim=-1, keepdim=True).mul_(2.0).to(torch.bfloat16)
-        _qweight, actual_scale = quantize_weight_per_block_w2(
+        _qweight, actual_scale = quantize_weight_per_block_int2(
             w, er_block_size=er, ie_block_size=er,
             w_scale_factor=2.0,
         )
@@ -130,7 +130,7 @@ class TestTernaryQuantize:
         """Dequantized weight approximates original within ternary precision."""
         torch.manual_seed(42)
         w = torch.randn(4, 512, dtype=torch.bfloat16)
-        qweight, scale = quantize_weight_per_block_w2(
+        qweight, scale = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=32,
         )
         w_deq = dequantize_weight(
@@ -148,10 +148,10 @@ class TestTernaryQuantize:
     def test_output_shapes(self):
         """Quantized output has correct shapes."""
         w = torch.randn(16, 1024, dtype=torch.bfloat16)
-        qweight, scale = quantize_weight_per_block_w2(
+        qweight, scale = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=32,
         )
-        # W2 packs 4 values per byte
+        # INT2 packs 4 values per byte
         assert qweight.shape == (16, 1024 // 4)
         # Scale: one per ie_block_size along input dim
         assert scale.shape == (16, 1024 // 32)
@@ -207,20 +207,20 @@ class TestW1vsW4Framework:
     def test_both_pack_as_uint8_4bit_format(self):
         """Both W1.58 (ternary upcast) and W4 produce INT4-packed qweight."""
         w = torch.randn(4, 512, dtype=torch.bfloat16)
-        q_ternary, _s158 = quantize_weight_per_block_w2(w)
+        q_ternary, _s158 = quantize_weight_per_block_int2(w)
         q_int4, _s4 = quantize_weight_per_block_int4(w)
 
         # Both are uint8 with packing density 2 values/byte
         assert q_ternary.dtype == torch.uint8
         assert q_int4.dtype == torch.uint8
-        # W2 packs 4 values per byte → half the size of INT4
+        # INT2 packs 4 values per byte → half the size of INT4
         assert q_ternary.shape[-1] == w.shape[-1] // 4
         assert q_int4.shape[-1] == w.shape[-1] // 2
 
     def test_scale_shapes_match(self):
         """Both produce scale tensors with the same shape for same IE."""
         w = torch.randn(8, 1024, dtype=torch.bfloat16)
-        _, s158 = quantize_weight_per_block_w2(
+        _, s158 = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=32,
         )
         _, s4 = quantize_weight_per_block_int4(
@@ -238,11 +238,11 @@ class TestW1vsW4Framework:
     def test_W1_quant_preserves_W4_pipeline(self):
         """W1.58 quantized values pass through the same unpack_int4 as W4."""
         w = torch.randn(4, 256, dtype=torch.bfloat16)
-        q_ternary, _ = quantize_weight_per_block_w2(
+        q_ternary, _ = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=32,
         )
-        # W2-packed qweight can be unpacked by unpack_w2
-        unpacked = unpack_w2(q_ternary)
+        # INT2-packed qweight can be unpacked by unpack_int2
+        unpacked = unpack_int2(q_ternary)
         assert unpacked.shape == w.shape
         assert unpacked.dtype == torch.int8
         assert unpacked.min() >= -1
@@ -253,7 +253,7 @@ class TestW1vsW4Framework:
         torch.manual_seed(42)
         w = torch.randn(4, 512, dtype=torch.bfloat16)
 
-        q158, s158 = quantize_weight_per_block_w2(
+        q158, s158 = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=256,
         )
         q4, s4 = quantize_weight_per_block_int4(
@@ -274,11 +274,11 @@ class TestW1vsW4Framework:
         """W1.58 ternary values encoded as uint4b8 work with INT4 pack pipeline."""
         torch.manual_seed(42)
         w = torch.randn(4, 512, dtype=torch.bfloat16)
-        qw2, sw2 = quantize_weight_per_block_w2(
+        q_int2, s_int2 = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=32,
         )
-        # Unpack W2 → get ternary values
-        ternary = unpack_w2(qw2)
+        # Unpack INT2 → get ternary values
+        ternary = unpack_int2(q_int2)
 
         # Convert ternary to uint4b8 for Marlin: q = t + 8
         uint4b8_vals = (ternary + 8).to(torch.uint8)
@@ -288,7 +288,7 @@ class TestW1vsW4Framework:
         assert uint4b8_vals.max() <= 15
 
         # Verify dequant correctness: (q - 8) * scale = t * scale
-        scale_expanded = sw2.repeat_interleave(32, dim=1)
+        scale_expanded = s_int2.repeat_interleave(32, dim=1)
         deq_from_uint4b8 = ((uint4b8_vals.to(torch.int32) - 8).float()
                              * scale_expanded.float())
         deq_from_ternary = ternary.float() * scale_expanded.float()
@@ -309,7 +309,7 @@ class TestTernaryBlockSplit:
         er, ie = 256, 32
         n = er // ie  # 8
 
-        qweight, scale = quantize_weight_per_block_w2(
+        qweight, scale = quantize_weight_per_block_int2(
             w, er_block_size=er, ie_block_size=ie,
         )
         # scale should have shape (2, 256/32) = (2, 8)
@@ -321,7 +321,7 @@ class TestTernaryBlockSplit:
     def test_no_split_when_er_equals_ie(self):
         """When ER == IE, no scale replication."""
         w = torch.randn(2, 256, dtype=torch.bfloat16)
-        qweight, scale = quantize_weight_per_block_w2(
+        qweight, scale = quantize_weight_per_block_int2(
             w, er_block_size=128, ie_block_size=128,
         )
         assert scale.shape == (2, 256 // 128)  # (2, 2)
@@ -332,15 +332,15 @@ class TestTernaryBlockSplit:
         w = torch.randn(4, 256, dtype=torch.bfloat16)
 
         # Quantize with IE=32 and IE=256
-        qw32, s32 = quantize_weight_per_block_w2(
+        qw32, s32 = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=32,
         )
-        qw256, s256 = quantize_weight_per_block_w2(
+        q_int256, s256 = quantize_weight_per_block_int2(
             w, er_block_size=256, ie_block_size=256,
         )
 
         w32 = dequantize_weight(qw32, s32, block_size=32, weight_bits=1.58)
-        w256 = dequantize_weight(qw256, s256, block_size=256, weight_bits=1.58)
+        w256 = dequantize_weight(q_int256, s256, block_size=256, weight_bits=1.58)
 
         # Bit-exact: same ternary values + same ER scale → same dequant
         assert torch.equal(w32, w256), (
@@ -369,7 +369,7 @@ class TestMarlinIECap:
             INT1_58_MAX,
             INT4_MAX,
             quantize_weight_per_block_int4,
-            quantize_weight_per_block_w2,
+            quantize_weight_per_block_int2,
         )
         # W4: absmax scale, W1.58: clip scale
         if ie_eff >= 128:
@@ -419,14 +419,14 @@ class TestMarlinIECap:
         w = torch.randn(4, 512, dtype=torch.bfloat16)
         er = 256
 
-        qw256, s256 = quantize_weight_per_block_w2(
+        q_int256, s256 = quantize_weight_per_block_int2(
             w, er_block_size=er, ie_block_size=256,
         )
-        qw128, s128 = quantize_weight_per_block_w2(
+        qw128, s128 = quantize_weight_per_block_int2(
             w, er_block_size=er, ie_block_size=128,
         )
 
-        w256 = dequantize_weight(qw256, s256, block_size=256, weight_bits=1.58)
+        w256 = dequantize_weight(q_int256, s256, block_size=256, weight_bits=1.58)
         w128 = dequantize_weight(qw128, s128, block_size=128, weight_bits=1.58)
         assert torch.equal(w256, w128), (
             f"max_diff={(w256 - w128).abs().max()}"
