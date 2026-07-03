@@ -275,7 +275,7 @@ def _resolve_quant_bits(quant_mode: str) -> tuple[int, int, int]:
     elif "w4" in mode:
         w_bits = 4
     elif "w2" in mode:
-        w_bits = 4
+        w_bits = 2
 
     if "a8" in mode:
         a_bits = 8
@@ -289,6 +289,10 @@ def _patch_config_json(
     target_dir: Path,
     quant_mode: str,
     is_w_quantized: bool = True,
+    backend: str = "marlin",
+    weight_bits: int | None = None,
+    activation_bits: int | None = None,
+    kv_cache_bits: int | None = None,
     auto_map_key: str = "AutoModelForCausalLM",
     auto_map_value: str = "modeling_edgerazor.EdgeRazorForCausalLM",
 ) -> None:
@@ -308,9 +312,10 @@ def _patch_config_json(
     cfg['quantization_config'] = {
         "quant_method": "edgerazor",
         "quant_mode": quant_mode,
-        "weight_bits": w_bits,
-        "activation_bits": a_bits,
-        "kv_cache_bits": kv_bits,
+        "backend": backend,
+        "weight_bits": weight_bits if weight_bits is not None else w_bits,
+        "activation_bits": activation_bits if activation_bits is not None else a_bits,
+        "kv_cache_bits": kv_cache_bits if kv_cache_bits is not None else kv_bits,
         "is_w_quantized": is_w_quantized,
     }
 
@@ -358,6 +363,10 @@ def convert(
     is_w_quantized: bool = False,
     dtype: str = "bfloat16",
     generate_readme: bool = False,
+    backend: str = "marlin",
+    weight_bits: int | None = None,
+    activation_bits: int | None = None,
+    kv_cache_bits: int | None = None,
 ) -> Path:
     """Convert an unquantized HF model to an EdgeRazor checkpoint.
 
@@ -373,6 +382,12 @@ def convert(
             (default), apply and save the quantized weights.
         dtype: Torch dtype for loading (default: ``"bfloat16"``).
         generate_readme: Whether to generate a minimal ``README.md``.
+        backend: Backend name written to ``quantization_config.backend``
+            (default: ``"marlin"``).
+        weight_bits: Override weight bit-width in ``quantization_config``.
+            Auto-detected from *quant_mode* when not given.
+        activation_bits: Override activation bit-width.
+        kv_cache_bits: Override KV-cache bit-width.
 
     Returns:
         Path to the output directory.
@@ -459,7 +474,15 @@ def convert(
         print("  Copied config.json")
 
     # Patch config.json
-    _patch_config_json(save_path, effective_quant_mode, is_w_quantized=is_w_quantized)
+    _patch_config_json(
+        save_path,
+        effective_quant_mode,
+        is_w_quantized=is_w_quantized,
+        backend=backend,
+        weight_bits=weight_bits,
+        activation_bits=activation_bits,
+        kv_cache_bits=kv_cache_bits,
+    )
 
     # Copy modeling_edgerazor.py template
     _copy_template(save_path, 'modeling_edgerazor.py', overwrite=True)
@@ -528,6 +551,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Generate a minimal README.md.",
     )
 
+    # quantization_config overrides
+    p.add_argument(
+        "--backend", type=str, default="marlin",
+        help="Backend written to quantization_config.backend (default: marlin).",
+    )
+    p.add_argument(
+        "--weight_bits", type=int, default=None,
+        help="Override weight bit-width in quantization_config. "
+             "Auto-detected from quant_mode when omitted.",
+    )
+    p.add_argument(
+        "--activation_bits", type=int, default=None,
+        help="Override activation bit-width in quantization_config.",
+    )
+    p.add_argument(
+        "--kv_cache_bits", type=int, default=None,
+        help="Override KV-cache bit-width in quantization_config.",
+    )
+
     return p.parse_args(argv)
 
 
@@ -543,6 +585,10 @@ def main(argv: list[str] | None = None) -> None:
         is_w_quantized=args.is_w_quantized,
         dtype=args.dtype,
         generate_readme=args.readme,
+        backend=args.backend,
+        weight_bits=args.weight_bits,
+        activation_bits=args.activation_bits,
+        kv_cache_bits=args.kv_cache_bits,
     )
 
 
