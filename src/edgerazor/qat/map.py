@@ -259,6 +259,19 @@ w1_58a8kv8_embint4 = create_quant_config(
 )
 w1_58a8 = create_quant_config(mp_prop=0.00)
 
+# W1.58 with activation quantized, KV in FP16, decoder-only linear (no embedding/lm_head)
+w1_58a8kv16 = create_quant_config(
+    mp_prop=0.00,
+    with_activation_kv=True,
+    w_scale_factor=2.0,
+    target_types=["linear"],
+    exclude_names=["lm_head"],
+)
+# kv16 → clear KV quant settings; keep only activation
+w1_58a8kv16["function"]["kv_cache_function"] = ""
+w1_58a8kv16["function"]["kv_block_size"] = -1
+w1_58a8kv16["select"]["target_types"].remove("kv_cache")
+
 # Activation + KV only (w/a=256, kv=64, no weight modules)
 a8kv8 = create_quant_config(
     w_func=_W1_58_CLIP, with_activation_kv=True, is_w_quantized=False,
@@ -279,6 +292,7 @@ quant_config_map = {
     "w1_58a8kv8": w1_58a8kv8,
     "w1_58a8kv8_embint4": w1_58a8kv8_embint4,
     "w1_58a8": w1_58a8,
+    "w1_58a8kv16": w1_58a8kv16,
     "a8kv8": a8kv8,
 
     # ── Legacy model-specific configs (backward compatible) ──
